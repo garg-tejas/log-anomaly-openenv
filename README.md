@@ -198,20 +198,48 @@ Episodes are graded on four components:
 
 Run the ReAct + Qwen baseline:
 
+### Option 1: HuggingFace Router (Cloud)
 ```bash
 # Set HuggingFace token
 export HF_TOKEN="your-huggingface-token"
 
 # Run baseline
 python baseline_inference.py --difficulty all --episodes 5
+```
 
-# Or programmatically
+### Option 2: Local LLM with Ollama
+```bash
+# Install and start Ollama
+ollama pull qwen2.5:7b
+
+# Run baseline with local model
+python baseline_inference.py \
+  --base-url http://localhost:11434/v1 \
+  --model qwen2.5:7b \
+  --difficulty all --episodes 3
+```
+
+### Option 3: Local LLM with vLLM
+```bash
+# Start vLLM server
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-7B-Instruct --port 8080
+
+# Run baseline
+python baseline_inference.py \
+  --base-url http://localhost:8080/v1 \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --difficulty all --episodes 3
+```
+
+### Programmatic Usage
+```python
 from baseline_inference import run_baseline_inference
 
 results = run_baseline_inference(
     environment=env,
     difficulty="all",
-    model="Qwen/Qwen3.5-27B",
+    model="Qwen/Qwen3.5-2B",
     num_episodes=3,
 )
 ```
