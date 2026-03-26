@@ -4,10 +4,6 @@ version = "1.0.0"
 description = "A real-world OpenEnv environment for training AI agents to investigate log anomalies"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "BSD-3-Clause"}
-authors = [
-    {name = "OpenEnv Contributors"}
-]
 keywords = [
     "openenv",
     "reinforcement-learning",
@@ -17,9 +13,6 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

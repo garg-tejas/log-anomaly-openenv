@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 """
 Log Anomaly Investigation Environment.
 
@@ -44,7 +39,11 @@ from models import (
     SubmitAnswer,
     EpisodeResult,
     LogLine,
+    EnvironmentMode,
+    DataSource,
+    LogSource,
 )
+from loghub_parser import LogHubFactory, LogHubSampler
 
 
 class InvestigationEpisode:
@@ -85,6 +84,9 @@ class InvestigationEpisode:
         log_content: List[LogLine],
         ground_truth: Dict[str, Any],
         sandbox_dir: str,
+        mode: EnvironmentMode = EnvironmentMode.EVAL,
+        data_source: DataSource = DataSource.SYNTHETIC,
+        log_source: Optional[LogSource] = None,
     ):
         """
         Initialize an investigation episode.
@@ -95,6 +97,9 @@ class InvestigationEpisode:
             log_content: Log lines for this episode
             ground_truth: Ground truth metadata
             sandbox_dir: Directory for sandboxed execution
+            mode: Environment operating mode (training/eval)
+            data_source: Source of log data (synthetic/loghub)
+            log_source: Specific LogHub source if applicable
         """
         self.episode_id = episode_id
         self.difficulty = difficulty
@@ -102,6 +107,9 @@ class InvestigationEpisode:
         self.ground_truth = ground_truth
         self.sandbox_dir = sandbox_dir
         self.log_filepath = os.path.join(sandbox_dir, "log.txt")
+        self.mode = mode
+        self.data_source = data_source
+        self.log_source = log_source
 
         # Episode state
         self.step_count = 0
@@ -128,13 +136,28 @@ class InvestigationEpisode:
         Reset the episode state.
 
         Returns:
-            Initial observation
+            Initial observation with mode-appropriate hints only.
+            In EVAL mode: No ground truth hints are provided.
+            In TRAINING mode: General difficulty hints only (no specific answers).
         """
         self.step_count = 0
         self.command_history = []
         self.answer_submitted = False
         self.predicted_answer = None
         self.episode_reward = 0.0
+
+        # Build metadata with mode-appropriate hints
+        metadata = {
+            "log_file": "log.txt",
+            "log_lines": len(self.log_lines),
+        }
+
+        # In TRAINING mode, provide general difficulty hints
+        # In EVAL mode, provide NO hints about the anomaly
+        if self.mode == EnvironmentMode.TRAINING:
+            metadata["difficulty_hint"] = self._get_severity_hint()
+            # No component or type hints - agent must discover these
+        # In EVAL mode: metadata contains no hints about the anomaly
 
         return InvestigationObservation(
             command_output="",
@@ -144,14 +167,10 @@ class InvestigationEpisode:
             answer_submitted=False,
             task_difficulty=self.difficulty,
             episode_reward=0.0,
-            metadata={
-                "log_file": "log.txt",
-                "log_lines": len(self.log_lines),
-                "ground_truth_hint": {
-                    "component": self.ground_truth.get("component"),
-                    "severity_hint": self._get_severity_hint(),
-                },
-            },
+            mode=self.mode,
+            data_source=self.data_source,
+            log_source=self.log_source,
+            metadata=metadata,
         )
 
     def _get_severity_hint(self) -> str:
@@ -203,13 +222,22 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty,
                 episode_reward=self.episode_reward,
+                mode=self.mode,
+                data_source=self.data_source,
+                log_source=self.log_source,
                 metadata={"error": "invalid_action_type"},
             )
 
     def _handle_submit(
         self, answer: Optional[SubmitAnswer]
     ) -> InvestigationObservation:
-        """Handle answer submission."""
+        """
+        Handle answer submission.
+
+        Feedback is mode-dependent:
+        - TRAINING: Full feedback with component scores, type accuracy, window IoU, efficiency, AND ground truth.
+        - EVAL: Scores only (no ground truth revealed to prevent learning during evaluation).
+        """
         if answer is None:
             return InvestigationObservation(
                 command_output="No answer provided for submission.",
@@ -219,6 +247,9 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty,
                 episode_reward=self.episode_reward,
+                mode=self.mode,
+                data_source=self.data_source,
+                log_source=self.log_source,
                 metadata={"error": "no_answer"},
             )
 
@@ -234,15 +265,11 @@ class InvestigationEpisode:
         )
         self.episode_reward = result.reward
 
-        return InvestigationObservation(
-            command_output=self._format_answer_feedback(result),
-            command_history=self.command_history,
-            steps_remaining=0,
-            total_steps=self.MAX_STEPS,
-            answer_submitted=True,
-            task_difficulty=self.difficulty,
-            episode_reward=self.episode_reward,
-            metadata={
+        # Format feedback based on mode
+        if self.mode == EnvironmentMode.TRAINING:
+            # Full feedback including ground truth for training
+            feedback = self._format_answer_feedback(result, show_ground_truth=True)
+            metadata = {
                 "episode_complete": True,
                 "scores": {
                     "component": result.component_score,
@@ -250,7 +277,39 @@ class InvestigationEpisode:
                     "window": result.window_score,
                     "efficiency": result.efficiency_score,
                 },
-            },
+                "ground_truth": {
+                    "anomaly_type": result.ground_truth.get("anomaly_type"),
+                    "component": result.ground_truth.get("component"),
+                    "start_time": result.ground_truth.get("start_time"),
+                    "end_time": result.ground_truth.get("end_time"),
+                },
+            }
+        else:
+            # EVAL mode: scores only, no ground truth
+            feedback = self._format_answer_feedback(result, show_ground_truth=False)
+            metadata = {
+                "episode_complete": True,
+                "scores": {
+                    "component": result.component_score,
+                    "type": result.type_score,
+                    "window": result.window_score,
+                    "efficiency": result.efficiency_score,
+                },
+                "note": "Ground truth withheld in EVAL mode",
+            }
+
+        return InvestigationObservation(
+            command_output=feedback,
+            command_history=self.command_history,
+            steps_remaining=0,
+            total_steps=self.MAX_STEPS,
+            answer_submitted=True,
+            task_difficulty=self.difficulty,
+            episode_reward=self.episode_reward,
+            mode=self.mode,
+            data_source=self.data_source,
+            log_source=self.log_source,
+            metadata=metadata,
         )
 
     def _handle_bash(self, command: str) -> InvestigationObservation:
@@ -271,6 +330,9 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty,
                 episode_reward=self.episode_reward,
+                mode=self.mode,
+                data_source=self.data_source,
+                log_source=self.log_source,
                 metadata={"error": error_msg},
             )
 
@@ -291,6 +353,9 @@ class InvestigationEpisode:
             answer_submitted=False,
             task_difficulty=self.difficulty,
             episode_reward=self.episode_reward,
+            mode=self.mode,
+            data_source=self.data_source,
+            log_source=self.log_source,
             metadata={
                 "last_command": command,
                 "output_truncated": len(output) >= self.OUTPUT_TRUNCATION,
@@ -374,8 +439,17 @@ class InvestigationEpisode:
         except Exception as e:
             return "", f"Execution error: {str(e)}"
 
-    def _format_answer_feedback(self, result: EpisodeResult) -> str:
-        """Format feedback for submitted answer."""
+    def _format_answer_feedback(self, result: EpisodeResult, show_ground_truth: bool = True) -> str:
+        """
+        Format feedback for submitted answer.
+
+        Args:
+            result: Episode result from grading
+            show_ground_truth: Whether to include ground truth in feedback
+
+        Returns:
+            Formatted feedback string
+        """
         lines = [
             "=" * 50,
             "ANSWER SUBMITTED",
@@ -386,13 +460,18 @@ class InvestigationEpisode:
             "Type Classification: {:.4f}".format(result.type_score),
             "Window Precision: {:.4f}".format(result.window_score),
             "Investigation Efficiency: {:.4f}".format(result.efficiency_score),
-            "-" * 50,
-            "Ground Truth:",
-            f"  Type: {result.ground_truth.get('anomaly_type')}",
-            f"  Component: {result.ground_truth.get('component')}",
-            f"  Window: {result.ground_truth.get('start_time')} to {result.ground_truth.get('end_time')}",
-            "=" * 50,
         ]
+
+        if show_ground_truth:
+            lines.extend([
+                "-" * 50,
+                "Ground Truth:",
+                f"  Type: {result.ground_truth.get('anomaly_type')}",
+                f"  Component: {result.ground_truth.get('component')}",
+                f"  Window: {result.ground_truth.get('start_time')} to {result.ground_truth.get('end_time')}",
+            ])
+
+        lines.append("=" * 50)
         return "\n".join(lines)
 
     def get_result(self) -> EpisodeResult:
@@ -412,6 +491,14 @@ class LogAnomalyEnvironment:
     This environment simulates a sandboxed terminal where an agent can
     investigate log files using read-only bash commands to identify
     and characterize anomalies.
+
+    Supports two operating modes:
+    - TRAINING: Full feedback including ground truth for RL training
+    - EVAL: Limited feedback for fair agent evaluation
+
+    Supports two data sources:
+    - SYNTHETIC: Generated logs with injected anomalies
+    - LOGHUB: Real logs from LogHub datasets
     """
 
     def __init__(self):
@@ -423,6 +510,9 @@ class LogAnomalyEnvironment:
             log_file_path=None,
             ground_truth=None,
             task_id=None,
+            mode=EnvironmentMode.EVAL,
+            data_source=DataSource.SYNTHETIC,
+            log_source=None,
         )
         self._temp_dir: Optional[str] = None
 
@@ -431,6 +521,10 @@ class LogAnomalyEnvironment:
         self.injector = AnomalyInjector()
         self.grader = InvestigationGrader()
         self.task_generator = TaskGenerator(self.grader)
+        self.loghub_sampler = LogHubSampler()
+
+        # LogHub data cache (lazy loaded)
+        self._loghub_data: Dict[LogSource, Tuple[List[LogLine], Any]] = {}
 
         # Episode storage
         self.episodes: Dict[str, InvestigationEpisode] = {}
@@ -441,6 +535,9 @@ class LogAnomalyEnvironment:
         difficulty: str = "easy",
         episode_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        mode: str = "eval",
+        data_source: str = "synthetic",
+        log_source: Optional[str] = None,
         **kwargs: Any,
     ) -> InvestigationObservation:
         """
@@ -451,10 +548,13 @@ class LogAnomalyEnvironment:
             difficulty: Difficulty level ("easy", "medium", "hard")
             episode_id: Optional episode ID
             task_id: Optional specific task ID
+            mode: Operating mode ("training" or "eval")
+            data_source: Data source ("synthetic" or "loghub")
+            log_source: Specific LogHub source (HDFS, BGL, OpenStack, Apache)
             **kwargs: Additional options
 
         Returns:
-            Initial observation
+            Initial observation with mode-appropriate information
         """
         import random
         if seed is not None:
@@ -466,11 +566,33 @@ class LogAnomalyEnvironment:
         except ValueError:
             difficulty_enum = DifficultyLevel.EASY
 
+        # Parse mode
+        try:
+            mode_enum = EnvironmentMode(mode.lower())
+        except ValueError:
+            mode_enum = EnvironmentMode.EVAL
+
+        # Parse data source
+        try:
+            data_source_enum = DataSource(data_source.lower())
+        except ValueError:
+            data_source_enum = DataSource.SYNTHETIC
+
+        # Parse log source (for LogHub data)
+        log_source_enum = None
+        if log_source:
+            try:
+                log_source_enum = LogSource(log_source.upper())
+            except ValueError:
+                pass
+
         # Generate or load log content
         log_content, ground_truth = self._generate_episode(
             difficulty=difficulty_enum,
             seed=seed,
             task_id=task_id,
+            data_source=data_source_enum,
+            log_source=log_source_enum,
         )
 
         # Create sandbox directory
@@ -480,22 +602,28 @@ class LogAnomalyEnvironment:
         # Add episode_id to ground truth
         ground_truth["episode_id"] = ep_id
 
-        # Create episode
+        # Create episode with mode and data source
         self.episode = InvestigationEpisode(
             episode_id=ep_id,
             difficulty=difficulty_enum,
             log_content=log_content,
             ground_truth=ground_truth,
             sandbox_dir=self._temp_dir,
+            mode=mode_enum,
+            data_source=data_source_enum,
+            log_source=log_source_enum,
         )
 
-        # Update state
+        # Update state with mode and data source
         self.state = InvestigationState(
             episode_id=ep_id,
             step_count=0,
             log_file_path=self.episode.log_filepath,
             ground_truth=ground_truth,
             task_id=task_id,
+            mode=mode_enum,
+            data_source=data_source_enum,
+            log_source=log_source_enum,
         )
 
         # Store episode
@@ -509,6 +637,8 @@ class LogAnomalyEnvironment:
         difficulty: DifficultyLevel,
         seed: Optional[int] = None,
         task_id: Optional[str] = None,
+        data_source: DataSource = DataSource.SYNTHETIC,
+        log_source: Optional[LogSource] = None,
     ) -> Tuple[List[LogLine], Dict[str, Any]]:
         """
         Generate a new episode with injected anomaly.
@@ -517,6 +647,8 @@ class LogAnomalyEnvironment:
             difficulty: Difficulty level
             seed: Random seed
             task_id: Optional task ID
+            data_source: Source of log data (synthetic/loghub)
+            log_source: Specific LogHub source if applicable
 
         Returns:
             Tuple of (log content, ground truth)
@@ -539,6 +671,29 @@ class LogAnomalyEnvironment:
             DifficultyLevel.HARD: 2000,
         }.get(difficulty, 1000)
 
+        # Try LogHub data if requested
+        if data_source == DataSource.LOGHUB and log_source:
+            logs, metadata = self._load_loghub_data(log_source, seed, num_lines)
+            if logs:
+                # Inject anomaly into real logs
+                anomaly_types = config["allowed_anomaly_types"]
+                anomaly_type = random.choice(anomaly_types)
+                modified_logs, ground_truth = self.injector.inject(
+                    logs=logs,
+                    anomaly_type=anomaly_type,
+                    intensity=config["intensity"],
+                    seed=seed + 1 if seed else None,
+                )
+                ground_truth.update({
+                    "seed": seed,
+                    "difficulty": difficulty.value,
+                    "task_id": task_id or f"{difficulty.value}_{seed}",
+                    "data_source": "loghub",
+                    "log_source": log_source.value if log_source else None,
+                })
+                return modified_logs, ground_truth
+
+        # Default: generate synthetic logs
         logs, metadata = generate_synthetic_log(
             num_lines=num_lines,
             num_components=4,
@@ -563,9 +718,44 @@ class LogAnomalyEnvironment:
             "difficulty": difficulty.value,
             "task_id": task_id or f"{difficulty.value}_{seed}",
             "num_lines": num_lines,
+            "data_source": "synthetic",
         })
 
         return modified_logs, ground_truth
+
+    def _load_loghub_data(
+        self,
+        log_source: LogSource,
+        seed: Optional[int],
+        max_lines: int
+    ) -> Tuple[Optional[List[LogLine]], Optional[Any]]:
+        """
+        Load LogHub data for the specified source.
+
+        Args:
+            log_source: LogHub source to load
+            seed: Random seed
+            max_lines: Maximum lines to load
+
+        Returns:
+            Tuple of (logs, metadata) or (None, None) if not available
+        """
+        # Check for sample log file
+        sample_file = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "data",
+            f"{log_source.value.lower()}_sample.log"
+        )
+
+        if os.path.exists(sample_file):
+            try:
+                parser = LogHubFactory.get_parser(log_source.value, seed=seed)
+                logs, metadata = parser.parse_file(sample_file, max_lines=max_lines)
+                return logs, metadata
+            except Exception:
+                pass
+
+        return None, None
 
     def step(
         self,

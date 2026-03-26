@@ -9,8 +9,8 @@ port: 8000
 # Metadata
 title: Log Anomaly Investigation Environment
 description: |
-  A real-world OpenEnv environment for training AI agents to investigate log anomalies 
-  using bash command exploration. Agents must identify anomaly types, affected components, 
+  A real-world OpenEnv environment for training AI agents to investigate log anomalies
+  using bash command exploration. Agents must identify anomaly types, affected components,
   and time windows through iterative investigation.
 emoji: "🔍"
 colorFrom: purple
@@ -43,7 +43,7 @@ tasks:
     anomaly_types:
       - error_spike
     expected_score_range: [0.6, 1.0]
-    
+
   medium:
     difficulty: medium
     description: "Investigate logs to identify anomalies of various types."
@@ -53,7 +53,7 @@ tasks:
       - service_dropout
       - latency_degradation
     expected_score_range: [0.4, 0.8]
-    
+
   hard:
     difficulty: hard
     description: "Detect subtle anomalies with low-intensity signals."
@@ -80,7 +80,7 @@ action_space:
             - name: command
               type: string
               description: "Bash command to execute"
-              
+
     - name: submit
       fields:
         - name: action_type
@@ -91,7 +91,15 @@ action_space:
           fields:
             - name: anomaly_type
               type: enum
-              values: [error_spike, memory_leak, service_dropout, cascade_failure, latency_degradation, auth_anomaly]
+              values:
+                [
+                  error_spike,
+                  memory_leak,
+                  service_dropout,
+                  cascade_failure,
+                  latency_degradation,
+                  auth_anomaly,
+                ]
             - name: component
               type: string
               description: "Affected component name"
@@ -136,6 +144,18 @@ observation_space:
     - name: episode_reward
       type: number
       description: "Cumulative reward so far"
+    - name: mode
+      type: enum
+      values: [training, eval]
+      description: "Environment operating mode"
+    - name: data_source
+      type: enum
+      values: [synthetic, loghub]
+      description: "Source of log data"
+    - name: log_source
+      type: enum
+      values: [HDFS, BGL, OpenStack, Apache]
+      description: "Specific LogHub source if applicable"
 
 # Grading configuration
 grading:

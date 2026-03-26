@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 """
 Log Anomaly Investigation Environment - Data Models.
 
@@ -29,6 +24,38 @@ class DifficultyLevel(str, Enum):
     EASY = "easy"
     MEDIUM = "medium"
     HARD = "hard"
+
+
+class EnvironmentMode(str, Enum):
+    """
+    Operating mode for the environment.
+
+    - TRAINING: Full feedback including ground truth after submission.
+      Used for RL training where agents need complete information.
+    - EVAL: Limited feedback without ground truth.
+      Used for fair evaluation of agent performance.
+    """
+    TRAINING = "training"
+    EVAL = "eval"
+
+
+class DataSource(str, Enum):
+    """
+    Source of log data for episodes.
+
+    - SYNTHETIC: Generated synthetic logs with injected anomalies.
+    - LOGHUB: Real logs from LogHub datasets (HDFS, BGL, OpenStack, Apache).
+    """
+    SYNTHETIC = "synthetic"
+    LOGHUB = "loghub"
+
+
+class LogSource(str, Enum):
+    """Specific log sources from LogHub."""
+    HDFS = "HDFS"
+    BGL = "BGL"
+    OPENSTACK = "OpenStack"
+    APACHE = "Apache"
 
 
 class BashCommand(BaseModel):
@@ -79,6 +106,18 @@ class InvestigationObservation(BaseModel):
     answer_submitted: bool = Field(default=False, description="Whether answer was submitted")
     task_difficulty: DifficultyLevel = Field(..., description="Current task difficulty")
     episode_reward: float = Field(default=0.0, description="Cumulative reward so far")
+    mode: EnvironmentMode = Field(
+        default=EnvironmentMode.EVAL,
+        description="Environment mode (training=full feedback, eval=limited feedback)"
+    )
+    data_source: DataSource = Field(
+        default=DataSource.SYNTHETIC,
+        description="Source of log data (synthetic or loghub)"
+    )
+    log_source: Optional[LogSource] = Field(
+        default=None,
+        description="Specific log source if using LogHub data"
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
@@ -89,6 +128,9 @@ class InvestigationState(BaseModel):
     log_file_path: Optional[str] = Field(default=None, description="Path to log file")
     ground_truth: Optional[Dict[str, Any]] = Field(default=None, description="Ground truth for grading")
     task_id: Optional[str] = Field(default=None, description="Current task identifier")
+    mode: EnvironmentMode = Field(default=EnvironmentMode.EVAL, description="Environment operating mode")
+    data_source: DataSource = Field(default=DataSource.SYNTHETIC, description="Source of log data")
+    log_source: Optional[LogSource] = Field(default=None, description="Specific LogHub source if applicable")
 
 
 class EpisodeResult(BaseModel):

@@ -1,8 +1,5 @@
 # Log Anomaly Investigation Environment
 
-![OpenEnv](https://img.shields.io/badge/OpenEnv-Space-blue)
-![Python](https://img.shields.io/badge/Python-3.10+-green)
-
 A real-world OpenEnv environment for training AI agents to investigate log anomalies using bash command exploration.
 
 ## Overview

@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 """
 Log Parsing and Anomaly Injection Utilities.
 
@@ -494,10 +489,10 @@ class AnomalyInjector:
                 f"Dependency failure: {component} affected by {upstream} outage",
                 f"{component} entering degraded mode due to {upstream} failure",
             ]
-        
+
         severity = "ERROR" if stage == 0 else "WARN"
         message = self.rng.choice(messages)
-        
+
         return LogLine(
             timestamp=timestamp,
             severity=severity,
@@ -532,7 +527,7 @@ class AnomalyInjector:
 
         for i, log in enumerate(logs):
             modified_logs.append(log)
-            
+
             if start_idx <= i < end_idx:
                 progress = (i - start_idx) / window_size
                 # Exponential latency growth
@@ -561,7 +556,7 @@ class AnomalyInjector:
         """Generate latency-related log message."""
         severity = "WARN" if latency_ms < 300 else "ERROR"
         message = f"Request latency: {latency_ms:.1f}ms (threshold: 200ms)"
-        
+
         return LogLine(
             timestamp=timestamp,
             severity=severity,
@@ -600,7 +595,7 @@ class AnomalyInjector:
 
         for i, log in enumerate(logs):
             modified_logs.append(log)
-            
+
             if start_idx <= i < end_idx:
                 # Inject failed auth attempts at irregular intervals
                 if self.rng.random() < intensity * 0.3:
@@ -632,7 +627,7 @@ class AnomalyInjector:
             f"Brute force detection triggered for {source_ip}",
         ]
         message = self.rng.choice(messages)
-        
+
         return LogLine(
             timestamp=timestamp,
             severity="WARN",
