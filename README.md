@@ -196,16 +196,21 @@ Episodes are graded on four components:
 
 ## Baseline Scores
 
-Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting:
+Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting (30 episodes):
 
 | Difficulty | Mean Reward | Component | Type | Window | Efficiency |
 |------------|-------------|-----------|------|--------|------------|
-| **Easy**   | 0.705       | 1.00      | 1.00 | 0.40   | 0.43       |
-| **Medium** | 0.385       | 0.67      | 0.33 | 0.18   | 0.48       |
-| **Hard**   | 0.359       | 1.00      | 0.00 | 0.09   | 0.52       |
-| **Overall**| **0.483**   | 0.89      | 0.44 | 0.22   | 0.48       |
+| **Easy**   | 0.713       | 0.90      | 0.90 | 0.49   | 0.60       |
+| **Medium** | 0.230       | 0.50      | 0.20 | 0.09   | 0.16       |
+| **Hard**   | 0.378       | 0.90      | 0.20 | 0.09   | 0.47       |
+| **Overall**| **0.440**   | 0.77      | 0.43 | 0.22   | 0.41       |
 
-*Scores averaged over 3 episodes per difficulty. Hard tasks (cascade failure) remain challenging even for frontier models.*
+*30 episodes (10 per difficulty). Hard tasks (cascade failure) and medium tasks (memory leak, latency degradation, service dropout) remain challenging for small models.*
+
+### Highlights
+- **Best episode**: 0.92 reward (easy_8) - near-perfect detection
+- **Easy tasks**: 90% component accuracy, 90% type accuracy
+- **Hard tasks**: 90% component accuracy, but cascade_failure type detection remains difficult (20%)
 
 ## Baseline Inference
 
