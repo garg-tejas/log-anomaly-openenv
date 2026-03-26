@@ -4,19 +4,39 @@ Log Anomaly Investigation Environment - Client.
 This module provides the client for connecting to the Log Anomaly
 Investigation Environment server.
 """
-from typing import Optional, Dict, Any, List
+
 import os
+import sys
+from typing import Any, Dict, List, Optional
+
 import requests
-from .models import (
-    InvestigationAction,
-    InvestigationObservation,
-    InvestigationState,
-    EpisodeResult,
-    DifficultyLevel,
-    AnomalyType,
-    SubmitAnswer,
-    BashCommand,
-)
+
+# Support both package and direct execution modes
+if __package__:
+    from .models import (
+        AnomalyType,
+        BashCommand,
+        DifficultyLevel,
+        EpisodeResult,
+        InvestigationAction,
+        InvestigationObservation,
+        InvestigationState,
+        SubmitAnswer,
+    )
+else:
+    _parent_dir = os.path.dirname(os.path.abspath(__file__))
+    if _parent_dir not in sys.path:
+        sys.path.insert(0, _parent_dir)
+    from models import (
+        AnomalyType,
+        BashCommand,
+        DifficultyLevel,
+        EpisodeResult,
+        InvestigationAction,
+        InvestigationObservation,
+        InvestigationState,
+        SubmitAnswer,
+    )
 
 
 class LogAnomalyEnv:
@@ -62,10 +82,7 @@ class LogAnomalyEnv:
             raise ConnectionError(f"Failed to connect to environment: {e}")
 
     def reset(
-        self,
-        difficulty: str = "easy",
-        task_id: Optional[str] = None,
-        seed: Optional[int] = None
+        self, difficulty: str = "easy", task_id: Optional[str] = None, seed: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Reset the environment and start a new episode.
@@ -140,10 +157,7 @@ class LogAnomalyEnv:
         Returns:
             Episode result with scores
         """
-        response = self.session.get(
-            f"{self.base_url}/grade/{episode_id}",
-            timeout=5
-        )
+        response = self.session.get(f"{self.base_url}/grade/{episode_id}", timeout=5)
         response.raise_for_status()
         return response.json()
 
@@ -181,7 +195,15 @@ class LogAnomalyEnv:
         Returns:
             Configured client instance
         """
-        base_url = f"https://huggingface.co/spaces/{repo_id}"
+        # HuggingFace Spaces have URLs like: https://{username}-{space-name}.hf.space
+        # repo_id format is "username/space-name"
+        if "/" not in repo_id:
+            raise ValueError(f"Invalid repo_id format: {repo_id}. Expected 'username/space-name'")
+
+        username, space_name = repo_id.split("/", 1)
+        # HuggingFace converts underscores to hyphens in Space URLs
+        space_name = space_name.replace("_", "-")
+        base_url = f"https://{username}-{space_name}.hf.space"
         return cls(base_url=base_url)
 
     @classmethod

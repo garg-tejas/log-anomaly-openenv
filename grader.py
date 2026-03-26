@@ -4,6 +4,7 @@ Grader System for Log Anomaly Investigation.
 This module provides the grading functionality for evaluating agent
 performance on log anomaly investigation tasks.
 """
+
 import json
 import sys
 import os
@@ -80,7 +81,7 @@ class InvestigationGrader:
         # Calculate component score
         component_score = self._grade_component(
             prediction.component,
-            ground_truth.get("component"),
+            str(ground_truth.get("component", "")),
         )
 
         # Calculate type score
@@ -93,8 +94,8 @@ class InvestigationGrader:
         window_score = self._grade_window(
             prediction.start_time,
             prediction.end_time,
-            ground_truth.get("start_time"),
-            ground_truth.get("end_time"),
+            str(ground_truth.get("start_time", "")),
+            str(ground_truth.get("end_time", "")),
         )
 
         # Calculate efficiency score
@@ -102,10 +103,10 @@ class InvestigationGrader:
 
         # Total reward
         total_reward = (
-            component_score * self.COMPONENT_WEIGHT +
-            type_score * self.TYPE_WEIGHT +
-            window_score * self.WINDOW_WEIGHT +
-            efficiency_score * self.EFFICIENCY_WEIGHT
+            component_score * self.COMPONENT_WEIGHT
+            + type_score * self.TYPE_WEIGHT
+            + window_score * self.WINDOW_WEIGHT
+            + efficiency_score * self.EFFICIENCY_WEIGHT
         )
 
         return EpisodeResult(
@@ -217,8 +218,7 @@ class InvestigationGrader:
 
         intersection = (intersection_end - intersection_start).total_seconds()
         union = (
-            max(pred_end_dt, actual_end_dt) -
-            min(pred_start_dt, actual_start_dt)
+            max(pred_end_dt, actual_end_dt) - min(pred_start_dt, actual_start_dt)
         ).total_seconds()
 
         if union <= 0:
@@ -311,14 +311,10 @@ class TaskGenerator:
             ],
         },
         DifficultyLevel.HARD: {
-            "intensity": 0.25,  # Low intensity, subtle anomalies
-            "window_size_factor": 0.1,  # Narrow time windows
+            "intensity": 0.6,  # Moderate intensity for cascade
+            "window_size_factor": 0.15,  # Moderate time windows for multi-stage cascade
             "allowed_anomaly_types": [
-                AnomalyType.ERROR_SPIKE,
-                AnomalyType.MEMORY_LEAK,
-                AnomalyType.SERVICE_DROPOUT,
-                AnomalyType.CASCADE_FAILURE,
-                AnomalyType.AUTH_ANOMALY,
+                AnomalyType.CASCADE_FAILURE,  # CASCADE ONLY - requires temporal reasoning
             ],
         },
     }
@@ -342,7 +338,9 @@ class TaskGenerator:
         Returns:
             Task configuration dictionary
         """
-        return self.DIFFICULTY_SETTINGS.get(difficulty, self.DIFFICULTY_SETTINGS[DifficultyLevel.EASY])
+        return self.DIFFICULTY_SETTINGS.get(
+            difficulty, self.DIFFICULTY_SETTINGS[DifficultyLevel.EASY]
+        )
 
     def list_tasks(self) -> Dict[str, Any]:
         """
@@ -389,8 +387,8 @@ class TaskGenerator:
                 "Requires correlation across multiple log dimensions."
             ),
             DifficultyLevel.HARD: (
-                "Detect subtle anomalies with low-intensity signals. "
-                "Requires careful investigation and temporal analysis."
+                "Investigate cascade failures across multiple components. "
+                "Requires temporal reasoning to identify root cause and propagation chain."
             ),
         }
         return descriptions.get(difficulty, "")
@@ -439,7 +437,9 @@ def calculate_summary_stats(results: list, include_by_difficulty: bool = True) -
     # Only add by_difficulty at top level to prevent infinite recursion
     if include_by_difficulty:
         stats["by_difficulty"] = {
-            str(d.value): calculate_summary_stats([r for r in results if r.difficulty == d], include_by_difficulty=False)
+            str(d.value): calculate_summary_stats(
+                [r for r in results if r.difficulty == d], include_by_difficulty=False
+            )
             for d in set(r.difficulty for r in results)
         }
 

@@ -56,14 +56,10 @@ tasks:
 
   hard:
     difficulty: hard
-    description: "Detect subtle anomalies with low-intensity signals."
+    description: "Investigate cascade failures requiring multi-hop temporal reasoning."
     anomaly_types:
-      - error_spike
-      - memory_leak
-      - service_dropout
       - cascade_failure
-      - auth_anomaly
-    expected_score_range: [0.2, 0.6]
+    expected_score_range: [0.3, 0.7]
 
 # Action space definition
 action_space:

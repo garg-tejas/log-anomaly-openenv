@@ -5,6 +5,7 @@ This module provides parsers for real LogHub datasets including HDFS, BGL,
 OpenStack, and Apache logs. These parsers handle authentic log formats from
 production systems and are used for creating realistic evaluation scenarios.
 """
+
 import re
 import os
 import sys
@@ -24,6 +25,7 @@ else:
 
 class LogHubMetadata(NamedTuple):
     """Metadata for parsed LogHub data."""
+
     source: str  # HDFS, BGL, OpenStack, Apache
     time_range: Tuple[datetime, datetime]
     components: List[str]
@@ -37,27 +39,33 @@ class HDFSLogParser:
     """
     Parser for HDFS (Hadoop Distributed File System) logs.
 
-    HDFS log format:
-    1116 08-19 15:41:44 1488 INFO BlockManager: Compression is off
+    HDFS log format (LogHub HDFS_v1):
+    081109 203615 148 INFO dfs.DataNode$PacketResponder: PacketResponder 1 for block blk_38865049064139660 terminating
 
-    Format: <BlockId> <Date> <Time> <Pid> <Level> <Source>: <Content>
+    Format: <YYMMDD> <HHMMSS> <Pid> <Level> <Source>: <Content>
     """
 
-    # HDFS log pattern
+    # HDFS log pattern - matches LogHub HDFS_v1 format
+    # Example: 081109 203615 148 INFO dfs.DataNode$PacketResponder: PacketResponder 1...
     PATTERN = re.compile(
-        r'^(?P<block_id>\d+)\s+'
-        r'(?P<date>\d{2}-\d{2})\s+'
-        r'(?P<time>\d{2}:\d{2}:\d{2})\s+'
-        r'(?P<pid>\d+)\s+'
-        r'(?P<level>[\w]+)\s+'
-        r'(?P<source>[\w\.]+):\s*'
-        r'(?P<content>.*)$'
+        r"^(?P<date>\d{6})\s+"  # YYMMDD (e.g., 081109)
+        r"(?P<time>\d{6})\s+"  # HHMMSS (e.g., 203615)
+        r"(?P<pid>\d+)\s+"  # PID (e.g., 148)
+        r"(?P<level>[\w]+)\s+"  # Level (e.g., INFO, WARN)
+        r"(?P<source>[\w\.\$]+):\s*"  # Source with $ for inner classes (e.g., dfs.DataNode$PacketResponder)
+        r"(?P<content>.*)$"  # Content/message
     )
 
     # Block-related components
     BLOCK_COMPONENTS = [
-        "BlockManager", "DataNode", "NameNode", "FSNamesystem",
-        "Replication", "Heartbeat", "BlockReport", "BlockPool"
+        "BlockManager",
+        "DataNode",
+        "NameNode",
+        "FSNamesystem",
+        "Replication",
+        "Heartbeat",
+        "BlockReport",
+        "BlockPool",
     ]
 
     def __init__(self, seed: Optional[int] = None):
@@ -72,15 +80,28 @@ class HDFSLogParser:
 
         match = self.PATTERN.match(line)
         if match:
-            month, day = match.group('date').split('-')
-            timestamp = f"2009-{month}-{day}T{match.group('time')}:00"
+            # Parse YYMMDD format (e.g., 081109 -> 2008-11-09)
+            date_str = match.group("date")
+            year = int(date_str[0:2])
+            month = date_str[2:4]
+            day = date_str[4:6]
+            # Assume 20xx for years < 50, 19xx otherwise
+            full_year = 2000 + year if year < 50 else 1900 + year
+
+            # Parse HHMMSS format (e.g., 203615 -> 20:36:15)
+            time_str = match.group("time")
+            hour = time_str[0:2]
+            minute = time_str[2:4]
+            second = time_str[4:6]
+
+            timestamp = f"{full_year}-{month}-{day}T{hour}:{minute}:{second}"
 
             return LogLine(
                 timestamp=timestamp,
-                severity=self._normalize_severity(match.group('level')),
-                component=match.group('source'),
-                message=match.group('content'),
-                raw_line=line
+                severity=self._normalize_severity(match.group("level")),
+                component=match.group("source"),
+                message=match.group("content"),
+                raw_line=line,
             )
 
         # Fallback for unparseable lines
@@ -89,45 +110,55 @@ class HDFSLogParser:
     def _normalize_severity(self, level: str) -> str:
         """Normalize HDFS log levels to standard levels."""
         level_upper = level.upper()
-        if level_upper in ('FATAL', 'ERROR'):
-            return 'ERROR'
-        elif level_upper == 'WARN':
-            return 'WARN'
-        elif level_upper in ('INFO', 'DEBUG', 'TRACE'):
-            return 'INFO'
-        return 'INFO'
+        if level_upper in ("FATAL", "ERROR"):
+            return "ERROR"
+        elif level_upper == "WARN":
+            return "WARN"
+        elif level_upper in ("INFO", "DEBUG", "TRACE"):
+            return "INFO"
+        return "INFO"
 
     def _parse_fallback(self, line: str) -> Optional[LogLine]:
         """Fallback parser for non-standard HDFS lines."""
-        severity = 'INFO'
-        if 'ERROR' in line:
-            severity = 'ERROR'
-        elif 'WARN' in line:
-            severity = 'WARN'
-        elif 'FATAL' in line:
-            severity = 'ERROR'
+        severity = "INFO"
+        if "ERROR" in line:
+            severity = "ERROR"
+        elif "WARN" in line:
+            severity = "WARN"
+        elif "FATAL" in line:
+            severity = "ERROR"
 
-        # Extract timestamp
-        timestamp_match = re.search(r'\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line)
-        timestamp = timestamp_match.group(0) if timestamp_match else datetime.now().isoformat()
-        timestamp = f"2009-{timestamp.replace(' ', 'T')}"
+        # Try to extract YYMMDD HHMMSS timestamp format
+        timestamp_match = re.search(r"(\d{6})\s+(\d{6})", line)
+        if timestamp_match:
+            date_str = timestamp_match.group(1)
+            time_str = timestamp_match.group(2)
+            year = int(date_str[0:2])
+            full_year = 2000 + year if year < 50 else 1900 + year
+            month, day = date_str[2:4], date_str[4:6]
+            hour, minute, second = time_str[0:2], time_str[2:4], time_str[4:6]
+            timestamp = f"{full_year}-{month}-{day}T{hour}:{minute}:{second}"
+        else:
+            timestamp = datetime.now().isoformat()
 
         return LogLine(
             timestamp=timestamp,
             severity=severity,
             component="hdfs_unknown",
             message=line,
-            raw_line=line
+            raw_line=line,
         )
 
-    def parse_file(self, filepath: str, max_lines: Optional[int] = None) -> Tuple[List[LogLine], LogHubMetadata]:
+    def parse_file(
+        self, filepath: str, max_lines: Optional[int] = None
+    ) -> Tuple[List[LogLine], LogHubMetadata]:
         """Parse an entire HDFS log file."""
         lines = []
         timestamps = []
         components = set()
         severities = set()
 
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if max_lines and i >= max_lines:
                     break
@@ -140,7 +171,7 @@ class HDFSLogParser:
 
         time_range = (
             datetime.fromisoformat(min(timestamps)) if timestamps else datetime(2009, 1, 1),
-            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2009, 1, 1)
+            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2009, 1, 1),
         )
 
         return lines, LogHubMetadata(
@@ -149,7 +180,7 @@ class HDFSLogParser:
             components=list(components),
             severities=list(severities),
             total_lines=len(lines),
-            has_labels=False
+            has_labels=False,
         )
 
 
@@ -164,11 +195,11 @@ class BGLLogParser:
     """
 
     PATTERN = re.compile(
-        r'^(?P<timestamp>\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.\d{6})\s+'
-        r'(?P<node>\S+)\s+'
-        r'(?P<job>\d+|N/A)\s+'
-        r'\[(?P<severity>[\w]+)\]\s*'
-        r'(?P<message>.*)$'
+        r"^(?P<timestamp>\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.\d{6})\s+"
+        r"(?P<node>\S+)\s+"
+        r"(?P<job>\d+|N/A)\s+"
+        r"\[(?P<severity>[\w]+)\]\s*"
+        r"(?P<message>.*)$"
     )
 
     def __init__(self, seed: Optional[int] = None):
@@ -181,21 +212,21 @@ class BGLLogParser:
             return None
 
         # Skip comment lines
-        if line.startswith('##'):
+        if line.startswith("##"):
             return None
 
         match = self.PATTERN.match(line)
         if match:
             # Convert BGL timestamp format
-            ts = match.group('timestamp')
+            ts = match.group("timestamp")
             dt = datetime.strptime(ts, "%Y-%m-%d-%H.%M.%S.%f")
 
             return LogLine(
                 timestamp=dt.isoformat(),
-                severity=self._normalize_severity(match.group('severity')),
-                component=match.group('node'),
-                message=match.group('message'),
-                raw_line=line
+                severity=self._normalize_severity(match.group("severity")),
+                component=match.group("node"),
+                message=match.group("message"),
+                raw_line=line,
             )
 
         return self._parse_fallback(line)
@@ -203,45 +234,45 @@ class BGLLogParser:
     def _normalize_severity(self, severity: str) -> str:
         """Normalize BGL severity to standard levels."""
         sev_upper = severity.upper()
-        if sev_upper == 'ERR' or 'ERROR' in sev_upper:
-            return 'ERROR'
-        elif 'WARNING' in sev_upper or 'WARN' in sev_upper:
-            return 'WARN'
-        elif 'FATAL' in sev_upper:
-            return 'ERROR'
-        return 'INFO'
+        if sev_upper == "ERR" or "ERROR" in sev_upper:
+            return "ERROR"
+        elif "WARNING" in sev_upper or "WARN" in sev_upper:
+            return "WARN"
+        elif "FATAL" in sev_upper:
+            return "ERROR"
+        return "INFO"
 
     def _parse_fallback(self, line: str) -> Optional[LogLine]:
         """Fallback parser for non-standard BGL lines."""
-        severity = 'INFO'
-        if 'error' in line.lower():
-            severity = 'ERROR'
-        elif 'warning' in line.lower():
-            severity = 'WARN'
+        severity = "INFO"
+        if "error" in line.lower():
+            severity = "ERROR"
+        elif "warning" in line.lower():
+            severity = "WARN"
 
-        timestamp_match = re.search(r'\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}', line)
+        timestamp_match = re.search(r"\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}", line)
         timestamp = timestamp_match.group(0) if timestamp_match else datetime.now().isoformat()
-        timestamp = timestamp.replace('-', 'T').replace('.', ':', 2).replace('.', ':').replace(':', 'T', 1)
-
-        node_match = re.search(r'[A-Z]\d{3}-[A-Z]\d-[A-Z][A-Z]\d-[A-Z]\d\d', line)
-        node = node_match.group(0) if node_match else 'unknown'
-
-        return LogLine(
-            timestamp=timestamp,
-            severity=severity,
-            component=node,
-            message=line,
-            raw_line=line
+        timestamp = (
+            timestamp.replace("-", "T").replace(".", ":", 2).replace(".", ":").replace(":", "T", 1)
         )
 
-    def parse_file(self, filepath: str, max_lines: Optional[int] = None) -> Tuple[List[LogLine], LogHubMetadata]:
+        node_match = re.search(r"[A-Z]\d{3}-[A-Z]\d-[A-Z][A-Z]\d-[A-Z]\d\d", line)
+        node = node_match.group(0) if node_match else "unknown"
+
+        return LogLine(
+            timestamp=timestamp, severity=severity, component=node, message=line, raw_line=line
+        )
+
+    def parse_file(
+        self, filepath: str, max_lines: Optional[int] = None
+    ) -> Tuple[List[LogLine], LogHubMetadata]:
         """Parse an entire BGL log file."""
         lines = []
         timestamps = []
         components = set()
         severities = set()
 
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if max_lines and i >= max_lines:
                     break
@@ -254,7 +285,7 @@ class BGLLogParser:
 
         time_range = (
             datetime.fromisoformat(min(timestamps)) if timestamps else datetime(2006, 1, 1),
-            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2006, 1, 1)
+            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2006, 1, 1),
         )
 
         return lines, LogHubMetadata(
@@ -263,7 +294,7 @@ class BGLLogParser:
             components=list(components),
             severities=list(severities),
             total_lines=len(lines),
-            has_labels=False
+            has_labels=False,
         )
 
 
@@ -278,18 +309,28 @@ class OpenStackLogParser:
     """
 
     PATTERN = re.compile(
-        r'^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+'
-        r'(?P<pid>\d+)\s+'
-        r'(?P<level>\w+)\s+'
-        r'(?P<source>\S+)\s+'
-        r'\[(?P<extra>.*?)\]\s*'
-        r'(?P<message>.*)$'
+        r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)\s+"
+        r"(?P<pid>\d+)\s+"
+        r"(?P<level>\w+)\s+"
+        r"(?P<source>\S+)\s+"
+        r"\[(?P<extra>.*?)\]\s*"
+        r"(?P<message>.*)$"
     )
 
     # OpenStack service components
     OPENSTACK_COMPONENTS = [
-        "nova", "neutron", "glance", "cinder", "keystone", "swift",
-        "horizon", "ceilometer", "heat", "ironic", "zaqar", "oslo"
+        "nova",
+        "neutron",
+        "glance",
+        "cinder",
+        "keystone",
+        "swift",
+        "horizon",
+        "ceilometer",
+        "heat",
+        "ironic",
+        "zaqar",
+        "oslo",
     ]
 
     def __init__(self, seed: Optional[int] = None):
@@ -303,14 +344,14 @@ class OpenStackLogParser:
 
         match = self.PATTERN.match(line)
         if match:
-            timestamp = match.group('timestamp').replace(' ', 'T')
+            timestamp = match.group("timestamp").replace(" ", "T")
 
             return LogLine(
                 timestamp=timestamp,
-                severity=self._normalize_severity(match.group('level')),
-                component=match.group('source'),
-                message=match.group('message'),
-                raw_line=line
+                severity=self._normalize_severity(match.group("level")),
+                component=match.group("source"),
+                message=match.group("message"),
+                raw_line=line,
             )
 
         return self._parse_fallback(line)
@@ -318,44 +359,46 @@ class OpenStackLogParser:
     def _normalize_severity(self, level: str) -> str:
         """Normalize OpenStack log levels to standard levels."""
         level_upper = level.upper()
-        if level_upper in ('ERROR', 'ERR'):
-            return 'ERROR'
-        elif level_upper in ('WARNING', 'WARN'):
-            return 'WARN'
-        elif level_upper == 'CRITICAL':
-            return 'ERROR'
-        elif level_upper in ('DEBUG', 'TRACE'):
-            return 'DEBUG'
-        return 'INFO'
+        if level_upper in ("ERROR", "ERR"):
+            return "ERROR"
+        elif level_upper in ("WARNING", "WARN"):
+            return "WARN"
+        elif level_upper == "CRITICAL":
+            return "ERROR"
+        elif level_upper in ("DEBUG", "TRACE"):
+            return "DEBUG"
+        return "INFO"
 
     def _parse_fallback(self, line: str) -> Optional[LogLine]:
         """Fallback parser for non-standard OpenStack lines."""
-        severity = 'INFO'
-        if 'ERROR' in line or 'error' in line.lower():
-            severity = 'ERROR'
-        elif 'WARNING' in line or 'warn' in line.lower():
-            severity = 'WARN'
+        severity = "INFO"
+        if "ERROR" in line or "error" in line.lower():
+            severity = "ERROR"
+        elif "WARNING" in line or "warn" in line.lower():
+            severity = "WARN"
 
-        timestamp_match = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line)
+        timestamp_match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", line)
         timestamp = timestamp_match.group(0) if timestamp_match else datetime.now().isoformat()
-        timestamp = timestamp.replace(' ', 'T')
+        timestamp = timestamp.replace(" ", "T")
 
         return LogLine(
             timestamp=timestamp,
             severity=severity,
             component="openstack",
             message=line,
-            raw_line=line
+            raw_line=line,
         )
 
-    def parse_file(self, filepath: str, max_lines: Optional[int] = None) -> Tuple[List[LogLine], LogHubMetadata]:
+    def parse_file(
+        self, filepath: str, max_lines: Optional[int] = None
+    ) -> Tuple[List[LogLine], LogHubMetadata]:
         """Parse an entire OpenStack log file."""
         lines = []
         timestamps = []
         components = set()
         severities = set()
 
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if max_lines and i >= max_lines:
                     break
@@ -368,7 +411,7 @@ class OpenStackLogParser:
 
         time_range = (
             datetime.fromisoformat(min(timestamps)) if timestamps else datetime(2016, 1, 1),
-            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2016, 1, 1)
+            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2016, 1, 1),
         )
 
         return lines, LogHubMetadata(
@@ -377,7 +420,7 @@ class OpenStackLogParser:
             components=list(components),
             severities=list(severities),
             total_lines=len(lines),
-            has_labels=False
+            has_labels=False,
         )
 
 
@@ -392,16 +435,25 @@ class ApacheLogParser:
     """
 
     PATTERN = re.compile(
-        r'^\[(?P<timestamp>[^\]]+)\]\s*'
-        r'\[(?P<level>\w+)\]\s*'
-        r'(?:\[client (?P<client>[^\]]+)\])?\s*'
-        r'(?P<message>.*)$'
+        r"^\[(?P<timestamp>[^\]]+)\]\s*"
+        r"\[(?P<level>\w+)\]\s*"
+        r"(?:\[client (?P<client>[^\]]+)\])?\s*"
+        r"(?P<message>.*)$"
     )
 
     MONTH_MAP = {
-        'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
-        'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
-        'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+        "Jan": "01",
+        "Feb": "02",
+        "Mar": "03",
+        "Apr": "04",
+        "May": "05",
+        "Jun": "06",
+        "Jul": "07",
+        "Aug": "08",
+        "Sep": "09",
+        "Oct": "10",
+        "Nov": "11",
+        "Dec": "12",
     }
 
     def __init__(self, seed: Optional[int] = None):
@@ -415,17 +467,17 @@ class ApacheLogParser:
 
         match = self.PATTERN.match(line)
         if match:
-            timestamp_str = match.group('timestamp')
+            timestamp_str = match.group("timestamp")
             timestamp = self._parse_apache_timestamp(timestamp_str)
 
-            client = match.group('client') or 'unknown'
+            client = match.group("client") or "unknown"
 
             return LogLine(
                 timestamp=timestamp,
-                severity=self._normalize_severity(match.group('level')),
+                severity=self._normalize_severity(match.group("level")),
                 component=f"apache_{client}",
-                message=match.group('message'),
-                raw_line=line
+                message=match.group("message"),
+                raw_line=line,
             )
 
         return self._parse_fallback(line)
@@ -436,50 +488,48 @@ class ApacheLogParser:
         parts = ts.split()
         if len(parts) >= 5:
             day, month, day_num, time, year = parts[:5]
-            month_num = self.MONTH_MAP.get(month, '01')
+            month_num = self.MONTH_MAP.get(month, "01")
             return f"{year}-{month_num}-{day_num}T{time}"
         return datetime.now().isoformat()
 
     def _normalize_severity(self, level: str) -> str:
         """Normalize Apache log levels to standard levels."""
         level_upper = level.upper()
-        if level_upper in ('ERROR', 'CRIT', 'ALERT', 'EMERG'):
-            return 'ERROR'
-        elif level_upper in ('WARNING', 'WARN'):
-            return 'WARN'
-        elif level_upper == 'NOTICE':
-            return 'INFO'
-        return 'INFO'
+        if level_upper in ("ERROR", "CRIT", "ALERT", "EMERG"):
+            return "ERROR"
+        elif level_upper in ("WARNING", "WARN"):
+            return "WARN"
+        elif level_upper == "NOTICE":
+            return "INFO"
+        return "INFO"
 
     def _parse_fallback(self, line: str) -> Optional[LogLine]:
         """Fallback parser for non-standard Apache lines."""
-        severity = 'INFO'
-        if 'error' in line.lower():
-            severity = 'ERROR'
-        elif 'warn' in line.lower():
-            severity = 'WARN'
+        severity = "INFO"
+        if "error" in line.lower():
+            severity = "ERROR"
+        elif "warn" in line.lower():
+            severity = "WARN"
 
-        timestamp_match = re.search(r'\d{4}-\d{2}-\d{2}|\[\w+ \w+ \d+ \d{2}:\d{2}:\d{2}', line)
+        timestamp_match = re.search(r"\d{4}-\d{2}-\d{2}|\[\w+ \w+ \d+ \d{2}:\d{2}:\d{2}", line)
         timestamp = timestamp_match.group(0) if timestamp_match else datetime.now().isoformat()
-        if timestamp.startswith('['):
+        if timestamp.startswith("["):
             timestamp = timestamp[1:]
 
         return LogLine(
-            timestamp=timestamp,
-            severity=severity,
-            component="apache",
-            message=line,
-            raw_line=line
+            timestamp=timestamp, severity=severity, component="apache", message=line, raw_line=line
         )
 
-    def parse_file(self, filepath: str, max_lines: Optional[int] = None) -> Tuple[List[LogLine], LogHubMetadata]:
+    def parse_file(
+        self, filepath: str, max_lines: Optional[int] = None
+    ) -> Tuple[List[LogLine], LogHubMetadata]:
         """Parse an entire Apache log file."""
         lines = []
         timestamps = []
         components = set()
         severities = set()
 
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if max_lines and i >= max_lines:
                     break
@@ -492,7 +542,7 @@ class ApacheLogParser:
 
         time_range = (
             datetime.fromisoformat(min(timestamps)) if timestamps else datetime(2016, 1, 1),
-            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2016, 1, 1)
+            datetime.fromisoformat(max(timestamps)) if timestamps else datetime(2016, 1, 1),
         )
 
         return lines, LogHubMetadata(
@@ -501,7 +551,7 @@ class ApacheLogParser:
             components=list(components),
             severities=list(severities),
             total_lines=len(lines),
-            has_labels=False
+            has_labels=False,
         )
 
 
@@ -517,10 +567,10 @@ class LogHubFactory:
     """
 
     PARSERS = {
-        'HDFS': HDFSLogParser,
-        'BGL': BGLLogParser,
-        'OpenStack': OpenStackLogParser,
-        'Apache': ApacheLogParser,
+        "HDFS": HDFSLogParser,
+        "BGL": BGLLogParser,
+        "OpenStack": OpenStackLogParser,
+        "Apache": ApacheLogParser,
     }
 
     @classmethod
@@ -542,7 +592,9 @@ class LogHubFactory:
         return parser_class(seed=seed)
 
     @classmethod
-    def parse_file(cls, filepath: str, source: Optional[str] = None, max_lines: Optional[int] = None) -> Tuple[List[LogLine], LogHubMetadata]:
+    def parse_file(
+        cls, filepath: str, source: Optional[str] = None, max_lines: Optional[int] = None
+    ) -> Tuple[List[LogLine], LogHubMetadata]:
         """
         Parse a log file, auto-detecting the source if not specified.
 
@@ -566,33 +618,37 @@ class LogHubFactory:
         filepath_lower = filepath.lower()
 
         # Detect from filename
-        if 'hdfs' in filepath_lower:
-            return 'HDFS'
-        elif 'bgl' in filepath_lower:
-            return 'BGL'
-        elif 'openstack' in filepath_lower:
-            return 'OpenStack'
-        elif 'apache' in filepath_lower:
-            return 'Apache'
+        if "hdfs" in filepath_lower:
+            return "HDFS"
+        elif "bgl" in filepath_lower:
+            return "BGL"
+        elif "openstack" in filepath_lower:
+            return "OpenStack"
+        elif "apache" in filepath_lower:
+            return "Apache"
 
         # Try to detect from content
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
                 sample = f.read(1000)
 
-                if re.search(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', sample):
-                    return 'HDFS'
-                elif re.search(r'\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}', sample):
-                    return 'BGL'
-                elif re.search(r'\[\w+ \w+ \d+ \d{2}:\d{2}:\d{2}', sample):
-                    return 'Apache'
-                elif re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+', sample):
-                    return 'OpenStack'
+                # HDFS LogHub format: YYMMDD HHMMSS PID LEVEL component:
+                if re.search(r"\d{6}\s+\d{6}\s+\d+\s+(INFO|WARN|ERROR|FATAL)\s+dfs\.", sample):
+                    return "HDFS"
+                # BGL format: YYYY-MM-DD-HH.MM.SS.microseconds
+                elif re.search(r"\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}", sample):
+                    return "BGL"
+                # Apache format: [Day Mon DD HH:MM:SS YYYY]
+                elif re.search(r"\[\w+ \w+ \d+ \d{2}:\d{2}:\d{2}", sample):
+                    return "Apache"
+                # OpenStack format: YYYY-MM-DD HH:MM:SS.microseconds
+                elif re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", sample):
+                    return "OpenStack"
         except:
             pass
 
         # Default to HDFS
-        return 'HDFS'
+        return "HDFS"
 
     @classmethod
     def list_sources(cls) -> List[str]:
@@ -623,7 +679,7 @@ class LogHubSampler:
         self,
         logs: List[LogLine],
         difficulty: DifficultyLevel,
-        anomaly_region: Optional[Tuple[int, int]] = None
+        anomaly_region: Optional[Tuple[int, int]] = None,
     ) -> Tuple[List[LogLine], Dict[str, Any]]:
         """
         Sample a segment of logs for an episode.
@@ -665,10 +721,12 @@ class LogHubSampler:
             margin = len(logs) * 0.1
             min_start = int(margin)
             max_start = int(len(logs) - segment_size - margin)
-            start_idx = self.rng.randint(min_start, max_start) if max_start > min_start else min_start
+            start_idx = (
+                self.rng.randint(min_start, max_start) if max_start > min_start else min_start
+            )
 
         # Extract segment
-        segment = logs[start_idx:start_idx + segment_size]
+        segment = logs[start_idx : start_idx + segment_size]
 
         # Generate ground truth
         ground_truth = {
@@ -680,10 +738,7 @@ class LogHubSampler:
         return segment, ground_truth
 
     def create_eval_sample(
-        self,
-        logs: List[LogLine],
-        metadata: LogHubMetadata,
-        difficulty: DifficultyLevel
+        self, logs: List[LogLine], metadata: LogHubMetadata, difficulty: DifficultyLevel
     ) -> Tuple[List[LogLine], Dict[str, Any]]:
         """
         Create an evaluation sample with ground truth from labeled data.
@@ -699,10 +754,12 @@ class LogHubSampler:
         segment, ground_truth = self.sample_segment(logs, difficulty)
 
         # Add metadata
-        ground_truth.update({
-            "log_source": metadata.source,
-            "difficulty": difficulty.value,
-        })
+        ground_truth.update(
+            {
+                "log_source": metadata.source,
+                "difficulty": difficulty.value,
+            }
+        )
 
         return segment, ground_truth
 
@@ -711,7 +768,7 @@ def load_loghub_sample(
     source: str,
     data_dir: str = "./data/loghub",
     max_lines: Optional[int] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[List[LogLine], LogHubMetadata]:
     """
     Load a sample from LogHub data.
@@ -727,10 +784,10 @@ def load_loghub_sample(
     """
     # Map sources to filenames
     filenames = {
-        'HDFS': 'hdfs.log',
-        'BGL': 'bgl.log',
-        'OpenStack': 'openstack.log',
-        'Apache': 'apache_error.log',
+        "HDFS": "hdfs.log",
+        "BGL": "bgl.log",
+        "OpenStack": "openstack.log",
+        "Apache": "apache_error.log",
     }
 
     filename = filenames.get(source.upper())

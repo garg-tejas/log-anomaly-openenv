@@ -1,3 +1,18 @@
+---
+title: Log Anomaly Investigation Environment
+emoji: "🔍"
+colorFrom: purple
+colorTo: blue
+sdk: docker
+pinned: false
+tags:
+  - openenv
+  - log-analysis
+  - anomaly-detection
+  - reinforcement-learning
+  - agent-training
+---
+
 # Log Anomaly Investigation Environment
 
 A real-world OpenEnv environment for training AI agents to investigate log anomalies using bash command exploration.
@@ -12,7 +27,7 @@ This environment simulates a realistic log investigation scenario where an agent
 - **Sandboxed Execution**: Safe bash command execution with security controls
 - **Multiple Difficulty Levels**: Easy, Medium, and Hard tasks
 - **Multi-axis Grading**: Component identification, type classification, window precision, efficiency
-- **Baseline Inference**: ReAct + GPT-4o baseline included
+- **Baseline Inference**: ReAct + Qwen baseline included
 
 ## Installation
 
@@ -181,11 +196,11 @@ Episodes are graded on four components:
 
 ## Baseline Inference
 
-Run the ReAct + GPT-4o baseline:
+Run the ReAct + Qwen baseline:
 
 ```bash
-# Set API key
-export OPENAI_API_KEY="your-api-key"
+# Set HuggingFace token
+export HF_TOKEN="your-huggingface-token"
 
 # Run baseline
 python baseline_inference.py --difficulty all --episodes 5
@@ -196,7 +211,7 @@ from baseline_inference import run_baseline_inference
 results = run_baseline_inference(
     environment=env,
     difficulty="all",
-    model="gpt-4o",
+    model="Qwen/Qwen3.5-27B",
     num_episodes=3,
 )
 ```
