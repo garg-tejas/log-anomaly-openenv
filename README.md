@@ -192,7 +192,20 @@ Episodes are graded on four components:
 | ------ | -------------- | ---------------- | ----------- |
 | Easy   | High (0.8)     | Error Spike only | ~500 lines  |
 | Medium | Moderate (0.5) | All types        | ~1000 lines |
-| Hard   | Low (0.25)     | All types        | ~2000 lines |
+| Hard   | Low (0.6)      | Cascade Failure  | ~2000 lines |
+
+## Baseline Scores
+
+Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting:
+
+| Difficulty | Mean Reward | Component | Type | Window | Efficiency |
+|------------|-------------|-----------|------|--------|------------|
+| **Easy**   | 0.705       | 1.00      | 1.00 | 0.40   | 0.43       |
+| **Medium** | 0.385       | 0.67      | 0.33 | 0.18   | 0.48       |
+| **Hard**   | 0.359       | 1.00      | 0.00 | 0.09   | 0.52       |
+| **Overall**| **0.483**   | 0.89      | 0.44 | 0.22   | 0.48       |
+
+*Scores averaged over 3 episodes per difficulty. Hard tasks (cascade failure) remain challenging even for frontier models.*
 
 ## Baseline Inference
 
