@@ -4,9 +4,18 @@ FastAPI Application for Log Anomaly Investigation Environment.
 This module creates an HTTP server that exposes the LogAnomalyEnvironment
 over REST endpoints following the OpenEnv specification.
 """
+
 import os
 import sys
 from typing import Any, Dict, Optional, List
+
+# Load environment variables from .env file if present
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, use system env vars only
 
 # Add parent directory to path for imports when running directly
 _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -70,6 +79,7 @@ environment = LogAnomalyEnvironment()
 # Request/Response models for endpoints
 class ResetRequest(BaseModel):
     """Request body for reset endpoint."""
+
     difficulty: str = "easy"
     seed: Optional[int] = None
     task_id: Optional[str] = None
@@ -81,6 +91,8 @@ class ResetRequest(BaseModel):
 
 class StepRequest(BaseModel):
     """Request body for step endpoint."""
+
+    episode_id: Optional[str] = None  # Episode ID for thread safety
     action_type: str
     bash_command: Optional[BashCommand] = None
     answer: Optional[SubmitAnswer] = None
@@ -88,8 +100,9 @@ class StepRequest(BaseModel):
 
 class BaselineRequest(BaseModel):
     """Request body for baseline endpoint."""
+
     difficulty: str = "all"
-    model: str = "gpt-4o"
+    model: str = "Qwen/Qwen3.5-27B"
     num_episodes: int = 5
 
 
@@ -156,6 +169,17 @@ async def step_environment(request: StepRequest) -> Dict[str, Any]:
         Observation and reward
     """
     try:
+        # Use provided episode_id or fall back to current
+        episode_id = request.episode_id or environment.state.episode_id
+
+        if not episode_id or episode_id not in environment.episodes:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid episode_id. Call /reset first. Got: {episode_id}"
+            )
+
+        # Get the specific episode
+        episode = environment.episodes[episode_id]
+
         # Build InvestigationAction from request
         action = InvestigationAction(
             action_type=request.action_type,
@@ -163,13 +187,18 @@ async def step_environment(request: StepRequest) -> Dict[str, Any]:
             answer=request.answer,
         )
 
-        observation = environment.step(action)
+        # Execute on the specific episode
+        observation = episode.step(action)
+        environment.state.step_count = episode.step_count
+
         return {
             "observation": observation.model_dump(),
-            "episode_id": environment.state.episode_id,
+            "episode_id": episode_id,
             "reward": observation.episode_reward,
             "done": observation.answer_submitted,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -237,10 +266,7 @@ async def grader_endpoint() -> Dict[str, Any]:
     """
     try:
         if environment.episode is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No active episode. Call /reset first."
-            )
+            raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
 
         episode_id = environment.state.episode_id
         result = environment.grade(episode_id)
@@ -264,6 +290,7 @@ async def run_baseline(request: BaselineRequest) -> Dict[str, Any]:
     """
     try:
         from baseline_inference import run_baseline_inference
+
         results = run_baseline_inference(
             environment=environment,
             difficulty=request.difficulty,
@@ -274,7 +301,7 @@ async def run_baseline(request: BaselineRequest) -> Dict[str, Any]:
     except ImportError:
         raise HTTPException(
             status_code=501,
-            detail="Baseline inference not available. Please install openai package."
+            detail="Baseline inference not available. Please install openai package.",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -305,6 +332,7 @@ async def root():
 def main():
     """Run the server."""
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 

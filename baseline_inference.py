@@ -1,12 +1,12 @@
 """
 Baseline Inference Script for Log Anomaly Investigation.
 
-This script provides baseline performance using ReAct prompting with GPT-4o
-or other compatible language models.
+This script provides baseline performance using ReAct prompting with Qwen
+via HuggingFace router.
 
 Usage:
     # Run from command line
-    python baseline_inference.py --difficulty easy --model gpt-4o --episodes 5
+    python baseline_inference.py --difficulty easy --episodes 5
 
     # Or import and use programmatically
     from baseline_inference import run_baseline_inference, ReactAgent
@@ -14,23 +14,26 @@ Usage:
     results = run_baseline_inference(
         environment=env,
         difficulty="all",
-        model="gpt-4o",
         num_episodes=3,
     )
 """
+
 import os
 import json
 import argparse
-import asyncio
-from typing import Any, Dict, List, Optional
-from dataclasses import dataclass
+import re
+from typing import Any, Dict, List
+from dataclasses import dataclass, field
 
-# Optional OpenAI import
+# Load environment variables from .env file if present
 try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
+    from dotenv import load_dotenv
+
+    load_dotenv()
 except ImportError:
-    OPENAI_AVAILABLE = False
+    pass  # python-dotenv not installed, use system env vars only
+
+from openai import OpenAI
 
 from models import (
     InvestigationAction,
@@ -53,22 +56,25 @@ class ReactAgent:
     investigate log anomalies systematically.
     """
 
-    model: str = "gpt-4o"
+    model: str = "Qwen/Qwen3.5-27B"
     max_steps: int = 15
-    client: Optional[Any] = None
+    client: OpenAI = field(init=False)
+    _api_model: str = field(init=False)
 
-    def __post_init__(self):
-        """Initialize the OpenAI client."""
-        if OPENAI_AVAILABLE:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if api_key:
-                self.client = OpenAI(api_key=api_key)
-            else:
-                print("Warning: OPENAI_API_KEY not set. Using mock responses.")
-                self.client = None
-        else:
-            print("Warning: openai package not installed. Using mock responses.")
-            self.client = None
+    def __post_init__(self) -> None:
+        """Initialize the HuggingFace router client."""
+        api_key = os.environ.get("HF_TOKEN")
+        if not api_key:
+            raise ValueError(
+                "HF_TOKEN environment variable not set. Please set it to your HuggingFace token."
+            )
+
+        self.client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=api_key,
+        )
+        # Use :novita suffix for actual API calls
+        self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
 
     def think(self, observation: InvestigationObservation, state: InvestigationState) -> str:
         """
@@ -83,25 +89,23 @@ class ReactAgent:
         """
         prompt = self._build_thinking_prompt(observation, state)
 
-        if self.client:
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": self._get_system_prompt(),
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.7,
-                    max_tokens=500,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                return f"Error calling API: {e}"
-        else:
-            return self._mock_thinking(observation, state)
+        response = self.client.chat.completions.create(
+            model=self._api_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": self._get_system_prompt(),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=500,
+        )
+
+        content = response.choices[0].message.content
+        if content is None:
+            return "Error: No response from model"
+        return content
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the agent."""
@@ -126,7 +130,7 @@ SUBMIT FORMAT (when you have enough evidence):
 {
     "action_type": "submit",
     "answer": {
-        "anomaly_type": "error_spike|memory_leak|service_dropout",
+        "anomaly_type": "error_spike|memory_leak|service_dropout|cascade_failure|latency_degradation",
         "component": "component_name",
         "start_time": "ISO timestamp",
         "end_time": "ISO timestamp"
@@ -160,12 +164,15 @@ Be thorough but efficient. You have limited steps."""
             prompt_parts.append("=== COMMAND HISTORY ===")
             for i, cmd_entry in enumerate(observation.command_history[-5:], 1):
                 prompt_parts.append(f"[{i}] Command: {cmd_entry['command']}")
-                if cmd_entry.get('error'):
+                if cmd_entry.get("error"):
                     prompt_parts.append(f"    Error: {cmd_entry['output']}")
                 else:
-                    output = cmd_entry['output']
+                    output = cmd_entry["output"]
                     if len(output) > 500:
-                        output = output[:500] + f"\n... [truncated, {len(cmd_entry['output'])} total chars]"
+                        output = (
+                            output[:500]
+                            + f"\n... [truncated, {len(cmd_entry['output'])} total chars]"
+                        )
                     prompt_parts.append(f"    Output:\n{output}")
             prompt_parts.append("")
 
@@ -173,35 +180,25 @@ Be thorough but efficient. You have limited steps."""
             prompt_parts.append("=== LAST OUTPUT ===")
             prompt_parts.append(observation.command_output[:1000])
 
-        prompt_parts.extend([
-            "",
-            "What is your next action? Provide your reasoning and the command to execute.",
-            'If you have identified the anomaly with sufficient confidence, submit your answer.',
-        ])
+        prompt_parts.extend(
+            [
+                "",
+                "What is your next action? Provide your reasoning and the command to execute.",
+                "If you have identified the anomaly with sufficient confidence, submit your answer.",
+            ]
+        )
 
         return "\n".join(prompt_parts)
 
-    def _mock_thinking(
-        self,
-        observation: InvestigationObservation,
-        state: InvestigationState,
-    ) -> str:
-        """Generate mock reasoning when API is unavailable."""
-        if len(observation.command_history) == 0:
-            return "EXPLORE: cat log.txt | head -50"
-        elif len(observation.command_history) == 1:
-            return "ANALYZE: grep -i error log.txt | head -20"
-        elif len(observation.command_history) == 2:
-            return "NARROW: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn"
-        else:
-            return "SUBMIT: I'll analyze what I've found and submit my answer."
-
-    def parse_action(self, thought: str) -> InvestigationAction:
+    def parse_action(
+        self, thought: str, observation: InvestigationObservation
+    ) -> InvestigationAction:
         """
         Parse the agent's thought into an action.
 
         Args:
             thought: The agent's reasoning text
+            observation: Current observation (for fallback command selection)
 
         Returns:
             InvestigationAction to execute
@@ -209,26 +206,27 @@ Be thorough but efficient. You have limited steps."""
         # Check if submitting
         if "submit" in thought.lower() or '{"action_type": "submit"' in thought:
             # Try to extract answer from JSON
-            import re
-            json_match = re.search(r'\{[^}]+\}', thought, re.DOTALL)
+            json_match = re.search(r"\{[^}]+\}", thought, re.DOTALL)
             if json_match:
                 try:
                     data = json.loads(json_match.group(0))
+                    answer_data = data.get("answer", {})
                     return InvestigationAction(
                         action_type="submit",
                         answer=SubmitAnswer(
-                            anomaly_type=AnomalyType(data.get("answer", {}).get("anomaly_type", "error_spike")),
-                            component=data.get("answer", {}).get("component", "unknown"),
-                            start_time=data.get("answer", {}).get("start_time", ""),
-                            end_time=data.get("answer", {}).get("end_time", ""),
+                            anomaly_type=AnomalyType(
+                                answer_data.get("anomaly_type", "error_spike")
+                            ),
+                            component=answer_data.get("component", "unknown"),
+                            start_time=answer_data.get("start_time", ""),
+                            end_time=answer_data.get("end_time", ""),
                         ),
                     )
-                except:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     pass
 
         # Extract bash command
-        import re
-        command_match = re.search(r'(?:Command|command):\s*([^\n]+)', thought)
+        command_match = re.search(r"(?:Command|command):\s*([^\n]+)", thought)
         if command_match:
             command = command_match.group(1).strip()
             if command:
@@ -238,7 +236,7 @@ Be thorough but efficient. You have limited steps."""
                 )
 
         # Default to viewing more log content
-        step = len(observation.command_history) if hasattr(self, 'observation') else 0
+        step = len(observation.command_history)
         commands = [
             "cat log.txt | head -50",
             "grep ERROR log.txt | head -20",
@@ -257,7 +255,7 @@ Be thorough but efficient. You have limited steps."""
 def run_baseline_inference(
     environment: Any,
     difficulty: str = "all",
-    model: str = "gpt-4o",
+    model: str = "Qwen/Qwen3.5-27B",
     num_episodes: int = 3,
 ) -> Dict[str, Any]:
     """
@@ -266,24 +264,17 @@ def run_baseline_inference(
     Args:
         environment: LogAnomalyEnvironment instance
         difficulty: Difficulty level ("easy", "medium", "hard", or "all")
-        model: Model to use for baseline
+        model: Model to use for baseline (via HuggingFace router)
         num_episodes: Number of episodes per difficulty
 
     Returns:
         Baseline results dictionary
     """
-    if not OPENAI_AVAILABLE:
-        return {
-            "status": "error",
-            "message": "OpenAI package not installed. Run: pip install openai",
-            "baseline_scores": {},
-        }
-
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("HF_TOKEN")
     if not api_key:
         return {
             "status": "error",
-            "message": "OPENAI_API_KEY not set in environment",
+            "message": "HF_TOKEN not set in environment",
             "baseline_scores": {},
         }
 
@@ -296,12 +287,12 @@ def run_baseline_inference(
     else:
         difficulties = [difficulty]
 
-    all_results = []
+    all_results: List[Any] = []
 
     for diff in difficulties:
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"Testing difficulty: {diff.upper()}")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
 
         for episode_num in range(num_episodes):
             print(f"\nEpisode {episode_num + 1}/{num_episodes}")
@@ -310,8 +301,6 @@ def run_baseline_inference(
             obs_dict = environment.reset(difficulty=diff, seed=episode_num)
             observation = _dict_to_observation(obs_dict["observation"])
             state = environment.state
-
-            episode_steps = []
 
             # Run agent
             for step in range(agent.max_steps):
@@ -322,29 +311,26 @@ def run_baseline_inference(
 
                 # Agent thinks
                 thought = agent.think(observation, state)
-                agent.observation = observation  # For mock command selection
 
-                # Parse action
-                action = agent.parse_action(thought)
+                # Parse action (pass observation for fallback)
+                action = agent.parse_action(thought, observation)
 
-                if action.action_type == "bash":
+                if action.action_type == "bash" and action.bash_command:
                     print(f"Executing: {action.bash_command.command}")
                 else:
                     print("Submitting answer")
 
                 # Execute action
                 result = environment.step(action)
-                obs_dict = result if isinstance(result, dict) else {
-                    "observation": result.model_dump(),
-                }
+                obs_dict = (
+                    result
+                    if isinstance(result, dict)
+                    else {
+                        "observation": result.model_dump(),
+                    }
+                )
                 observation = _dict_to_observation(obs_dict["observation"])
                 state = environment.state
-
-                episode_steps.append({
-                    "step": step + 1,
-                    "action": action.model_dump(),
-                    "thought": thought[:200],
-                })
 
             # Grade episode
             episode_result = environment.get_result()
@@ -378,33 +364,7 @@ def _dict_to_observation(d: Dict[str, Any]) -> InvestigationObservation:
     )
 
 
-async def run_baseline_async(
-    environment: Any,
-    difficulty: str = "all",
-    model: str = "gpt-4o",
-    num_episodes: int = 3,
-) -> Dict[str, Any]:
-    """
-    Async version of baseline inference.
-
-    Args:
-        environment: LogAnomalyEnvironment instance
-        difficulty: Difficulty level
-        model: Model to use
-        num_episodes: Number of episodes
-
-    Returns:
-        Baseline results
-    """
-    return run_baseline_inference(
-        environment=environment,
-        difficulty=difficulty,
-        model=model,
-        num_episodes=num_episodes,
-    )
-
-
-def main():
+def main() -> None:
     """Command-line interface for baseline inference."""
     parser = argparse.ArgumentParser(
         description="Run baseline inference on Log Anomaly Investigation Environment"
@@ -419,8 +379,8 @@ def main():
     parser.add_argument(
         "--model",
         "-m",
-        default="gpt-4o",
-        help="OpenAI model to use",
+        default="Qwen/Qwen3.5-27B",
+        help="Model to use via HuggingFace router (default: Qwen/Qwen3.5-27B)",
     )
     parser.add_argument(
         "--episodes",
@@ -436,14 +396,14 @@ def main():
     )
     parser.add_argument(
         "--api-key",
-        help="OpenAI API key (or set OPENAI_API_KEY env var)",
+        help="HuggingFace token (or set HF_TOKEN env var)",
     )
 
     args = parser.parse_args()
 
     # Set API key if provided
     if args.api_key:
-        os.environ["OPENAI_API_KEY"] = args.api_key
+        os.environ["HF_TOKEN"] = args.api_key
 
     # Import environment
     from server.log_anomaly_environment import LogAnomalyEnvironment

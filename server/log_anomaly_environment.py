@@ -8,6 +8,7 @@ This environment simulates a realistic log investigation scenario where
 an agent must identify anomalies in system logs using only read-only
 bash commands.
 """
+
 import os
 import re
 import subprocess
@@ -54,14 +55,26 @@ class InvestigationEpisode:
 
     # Allowed bash commands for security
     ALLOWED_COMMANDS = [
-        "grep", "egrep", "fgrep",  # Pattern matching
-        "awk", "sed",  # Text processing
-        "sort", "uniq", "wc",  # Counting/aggregation
-        "head", "tail", "cut",  # Selection
-        "cat", "less", "more",  # Display
-        "find", "xargs",  # File search
-        "date", "echo",  # Utilities
-        "ls", "pwd",  # Navigation (read-only)
+        "grep",
+        "egrep",
+        "fgrep",  # Pattern matching
+        "awk",
+        "sed",  # Text processing
+        "sort",
+        "uniq",
+        "wc",  # Counting/aggregation
+        "head",
+        "tail",
+        "cut",  # Selection
+        "cat",
+        "less",
+        "more",  # Display
+        "find",
+        "xargs",  # File search
+        "date",
+        "echo",  # Utilities
+        "ls",
+        "pwd",  # Navigation (read-only)
     ]
 
     # Forbidden patterns (security)
@@ -113,7 +126,7 @@ class InvestigationEpisode:
 
         # Episode state
         self.step_count = 0
-        self.command_history: List[Dict[str, str]] = []
+        self.command_history: List[Dict[str, Any]] = []
         self.answer_submitted = False
         self.predicted_answer: Optional[SubmitAnswer] = None
         self.episode_reward = 0.0
@@ -228,9 +241,7 @@ class InvestigationEpisode:
                 metadata={"error": "invalid_action_type"},
             )
 
-    def _handle_submit(
-        self, answer: Optional[SubmitAnswer]
-    ) -> InvestigationObservation:
+    def _handle_submit(self, answer: Optional[SubmitAnswer]) -> InvestigationObservation:
         """
         Handle answer submission.
 
@@ -317,11 +328,13 @@ class InvestigationEpisode:
         # Validate command
         is_valid, error_msg = self._validate_command(command)
         if not is_valid:
-            self.command_history.append({
-                "command": command,
-                "output": f"Command not allowed: {error_msg}",
-                "error": True,
-            })
+            self.command_history.append(
+                {
+                    "command": command,
+                    "output": f"Command not allowed: {error_msg}",
+                    "error": error_msg,  # Store error message as string
+                }
+            )
             return InvestigationObservation(
                 command_output=f"Error: {error_msg}",
                 command_history=self.command_history,
@@ -339,15 +352,25 @@ class InvestigationEpisode:
         # Execute command
         output, error = self._execute_command(command)
 
-        self.command_history.append({
-            "command": command,
-            "output": output,
-            "error": error,
-        })
+        self.command_history.append(
+            {
+                "command": command,
+                "output": output,
+                "error": error,
+            }
+        )
+
+        # Cap internal storage to last 5 entries to prevent memory bloat
+        if len(self.command_history) > 5:
+            self.command_history = self.command_history[-5:]
+
+        # Compute intermediate reward signal
+        intermediate_reward = self._compute_intermediate_reward(output, error)
+        self.episode_reward += intermediate_reward
 
         return InvestigationObservation(
             command_output=output,
-            command_history=self.command_history,
+            command_history=self.command_history[-3:],  # Return only last 3 in observations
             steps_remaining=self.MAX_STEPS - self.step_count,
             total_steps=self.MAX_STEPS,
             answer_submitted=False,
@@ -387,14 +410,16 @@ class InvestigationEpisode:
 
         base_cmd = parts[0]
 
-        # Check if command is in allowed list
+        # Check if base command is allowed
         if base_cmd not in self.ALLOWED_COMMANDS:
-            # Allow pipes, but check each command
-            if "|" in command:
-                pipe_cmds = [p.strip().split()[0] for p in command.split("|")]
-                for pc in pipe_cmds:
-                    if pc not in self.ALLOWED_COMMANDS:
-                        return False, f"Command not allowed: {pc}"
+            return False, f"Command not allowed: {base_cmd}"
+
+        # If command contains pipes, validate each piped command
+        if "|" in command:
+            pipe_cmds = [p.strip().split()[0] for p in command.split("|") if p.strip()]
+            for pc in pipe_cmds:
+                if pc not in self.ALLOWED_COMMANDS:
+                    return False, f"Command not allowed: {pc}"
 
         return True, ""
 
@@ -430,7 +455,10 @@ class InvestigationEpisode:
 
             # Truncate output if too long
             if len(stdout) > self.OUTPUT_TRUNCATION:
-                stdout = stdout[:self.OUTPUT_TRUNCATION] + f"\n... [truncated, total {len(result.stdout)} chars]"
+                stdout = (
+                    stdout[: self.OUTPUT_TRUNCATION]
+                    + f"\n... [truncated, total {len(result.stdout)} chars]"
+                )
 
             return stdout, stderr
 
@@ -438,6 +466,60 @@ class InvestigationEpisode:
             return "", "Command timed out (10s limit)"
         except Exception as e:
             return "", f"Execution error: {str(e)}"
+
+    def _compute_intermediate_reward(self, stdout: str, stderr: str) -> float:
+        """
+        Compute small intermediate reward based on command output.
+
+        Rewards agents for finding relevant signals without revealing ground truth.
+
+        Args:
+            stdout: Command stdout
+            stderr: Command stderr
+
+        Returns:
+            Small reward delta (typically -0.05 to +0.05)
+        """
+        if not stdout or stderr:
+            return 0.0
+
+        reward = 0.0
+        gt = self.ground_truth
+
+        # Small positive if output contains the affected component
+        if gt.get("component") and gt["component"].lower() in stdout.lower():
+            reward += 0.02
+
+        # Small positive if output contains timestamps in the anomaly window
+        try:
+            gt_start = self.grader._parse_timestamp(str(gt.get("start_time", "")))
+            gt_end = self.grader._parse_timestamp(str(gt.get("end_time", "")))
+
+            # Check if any timestamps in output fall within window
+            import re
+
+            timestamp_pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
+            for match in re.finditer(timestamp_pattern, stdout):
+                try:
+                    ts = self.grader._parse_timestamp(match.group(0))
+                    if gt_start <= ts <= gt_end:
+                        reward += 0.02
+                        break  # Only reward once per command
+                except:
+                    pass
+        except:
+            pass
+
+        # Small negative for repeating the same command pattern
+        if len(self.command_history) >= 3:
+            last_three = [h["command"] for h in self.command_history[-3:]]
+            # Check if all three are essentially the same (ignoring minor variations)
+            if (
+                len(set(cmd.split()[0] for cmd in last_three if cmd.strip())) == 1
+            ):  # Same base command
+                reward -= 0.01
+
+        return max(-0.05, min(0.05, reward))  # Cap between -0.05 and +0.05
 
     def _format_answer_feedback(self, result: EpisodeResult, show_ground_truth: bool = True) -> str:
         """
@@ -463,13 +545,15 @@ class InvestigationEpisode:
         ]
 
         if show_ground_truth:
-            lines.extend([
-                "-" * 50,
-                "Ground Truth:",
-                f"  Type: {result.ground_truth.get('anomaly_type')}",
-                f"  Component: {result.ground_truth.get('component')}",
-                f"  Window: {result.ground_truth.get('start_time')} to {result.ground_truth.get('end_time')}",
-            ])
+            lines.extend(
+                [
+                    "-" * 50,
+                    "Ground Truth:",
+                    f"  Type: {result.ground_truth.get('anomaly_type')}",
+                    f"  Component: {result.ground_truth.get('component')}",
+                    f"  Window: {result.ground_truth.get('start_time')} to {result.ground_truth.get('end_time')}",
+                ]
+            )
 
         lines.append("=" * 50)
         return "\n".join(lines)
@@ -526,8 +610,9 @@ class LogAnomalyEnvironment:
         # LogHub data cache (lazy loaded)
         self._loghub_data: Dict[LogSource, Tuple[List[LogLine], Any]] = {}
 
-        # Episode storage
+        # Episode storage with size limit
         self.episodes: Dict[str, InvestigationEpisode] = {}
+        self.MAX_EPISODES = 100  # Prevent unbounded growth
 
     def reset(
         self,
@@ -557,6 +642,7 @@ class LogAnomalyEnvironment:
             Initial observation with mode-appropriate information
         """
         import random
+
         if seed is not None:
             random.seed(seed)
 
@@ -626,8 +712,13 @@ class LogAnomalyEnvironment:
             log_source=log_source_enum,
         )
 
-        # Store episode
+        # Store episode with size limiting
         self.episodes[ep_id] = self.episode
+
+        # Evict oldest episode if we exceed limit
+        if len(self.episodes) > self.MAX_EPISODES:
+            oldest_id = min(self.episodes.keys())  # Simple FIFO
+            self.episodes.pop(oldest_id, None)
 
         # Return initial observation
         return self.episode.reset()
@@ -654,6 +745,7 @@ class LogAnomalyEnvironment:
             Tuple of (log content, ground truth)
         """
         import random
+
         if seed is not None:
             random.seed(seed)
             self.injector = AnomalyInjector(seed=seed)
@@ -684,13 +776,15 @@ class LogAnomalyEnvironment:
                     intensity=config["intensity"],
                     seed=seed + 1 if seed else None,
                 )
-                ground_truth.update({
-                    "seed": seed,
-                    "difficulty": difficulty.value,
-                    "task_id": task_id or f"{difficulty.value}_{seed}",
-                    "data_source": "loghub",
-                    "log_source": log_source.value if log_source else None,
-                })
+                ground_truth.update(
+                    {
+                        "seed": seed,
+                        "difficulty": difficulty.value,
+                        "task_id": task_id or f"{difficulty.value}_{seed}",
+                        "data_source": "loghub",
+                        "log_source": log_source.value if log_source else None,
+                    }
+                )
                 return modified_logs, ground_truth
 
         # Default: generate synthetic logs
@@ -713,21 +807,20 @@ class LogAnomalyEnvironment:
         )
 
         # Add metadata to ground truth
-        ground_truth.update({
-            "seed": seed,
-            "difficulty": difficulty.value,
-            "task_id": task_id or f"{difficulty.value}_{seed}",
-            "num_lines": num_lines,
-            "data_source": "synthetic",
-        })
+        ground_truth.update(
+            {
+                "seed": seed,
+                "difficulty": difficulty.value,
+                "task_id": task_id or f"{difficulty.value}_{seed}",
+                "num_lines": num_lines,
+                "data_source": "synthetic",
+            }
+        )
 
         return modified_logs, ground_truth
 
     def _load_loghub_data(
-        self,
-        log_source: LogSource,
-        seed: Optional[int],
-        max_lines: int
+        self, log_source: LogSource, seed: Optional[int], max_lines: int
     ) -> Tuple[Optional[List[LogLine]], Optional[Any]]:
         """
         Load LogHub data for the specified source.
@@ -744,7 +837,7 @@ class LogAnomalyEnvironment:
         sample_file = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "data",
-            f"{log_source.value.lower()}_sample.log"
+            f"{log_source.value.lower()}_sample.log",
         )
 
         if os.path.exists(sample_file):
