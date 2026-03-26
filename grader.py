@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 """
 Grader System for Log Anomaly Investigation.
 
@@ -440,12 +435,12 @@ def calculate_summary_stats(results: list, include_by_difficulty: bool = True) -
         "mean_window": round(statistics.mean(window_scores), 4),
         "mean_efficiency": round(statistics.mean(efficiency_scores), 4),
     }
-    
+
     # Only add by_difficulty at top level to prevent infinite recursion
     if include_by_difficulty:
         stats["by_difficulty"] = {
             str(d.value): calculate_summary_stats([r for r in results if r.difficulty == d], include_by_difficulty=False)
             for d in set(r.difficulty for r in results)
         }
-    
+
     return stats

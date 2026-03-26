@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
 """
 FastAPI Application for Log Anomaly Investigation Environment.
 
@@ -79,6 +74,9 @@ class ResetRequest(BaseModel):
     seed: Optional[int] = None
     task_id: Optional[str] = None
     episode_id: Optional[str] = None
+    mode: str = "eval"  # "training" or "eval"
+    data_source: str = "synthetic"  # "synthetic" or "loghub"
+    log_source: Optional[str] = None  # "HDFS", "BGL", "OpenStack", "Apache"
 
 
 class StepRequest(BaseModel):
@@ -118,18 +116,29 @@ async def reset_environment(request: ResetRequest) -> Dict[str, Any]:
             difficulty=request.difficulty,
             episode_id=request.episode_id,
             task_id=request.task_id,
+            mode=request.mode,
+            data_source=request.data_source,
+            log_source=request.log_source,
         )
+
+        # Build response with mode-appropriate metadata
+        # In EVAL mode: NO ground truth hints (prevents cheating)
+        # In TRAINING mode: General difficulty hints only
+        response_metadata = {
+            "log_file": "log.txt",
+            "difficulty": request.difficulty,
+            "mode": request.mode,
+            "data_source": request.data_source,
+        }
+
+        # Add log_source if specified
+        if request.log_source:
+            response_metadata["log_source"] = request.log_source
+
         return {
             "observation": observation.model_dump(),
             "episode_id": environment.state.episode_id,
-            "metadata": {
-                "log_file": "log.txt",
-                "difficulty": request.difficulty,
-                "ground_truth": {
-                    "component": environment.state.ground_truth.get("component"),
-                    "anomaly_type": environment.state.ground_truth.get("anomaly_type"),
-                },
-            },
+            "metadata": response_metadata,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -153,7 +162,7 @@ async def step_environment(request: StepRequest) -> Dict[str, Any]:
             bash_command=request.bash_command,
             answer=request.answer,
         )
-        
+
         observation = environment.step(action)
         return {
             "observation": observation.model_dump(),
@@ -229,10 +238,10 @@ async def grader_endpoint() -> Dict[str, Any]:
     try:
         if environment.episode is None:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="No active episode. Call /reset first."
             )
-        
+
         episode_id = environment.state.episode_id
         result = environment.grade(episode_id)
         return result.model_dump()
