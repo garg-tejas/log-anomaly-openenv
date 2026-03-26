@@ -102,7 +102,7 @@ class BaselineRequest(BaseModel):
     """Request body for baseline endpoint."""
 
     difficulty: str = "all"
-    model: str = "Qwen/Qwen3.5-27B"
+    model: str = "Qwen/Qwen3.5-2B"
     num_episodes: int = 5
 
 

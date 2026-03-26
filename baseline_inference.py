@@ -56,25 +56,37 @@ class ReactAgent:
     investigate log anomalies systematically.
     """
 
-    model: str = "Qwen/Qwen3.5-27B"
+    model: str = "Qwen/Qwen3.5-2B"
     max_steps: int = 15
+    base_url: str = ""  # Empty means auto-detect
     client: OpenAI = field(init=False)
     _api_model: str = field(init=False)
 
     def __post_init__(self) -> None:
-        """Initialize the HuggingFace router client."""
-        api_key = os.environ.get("HF_TOKEN")
-        if not api_key:
-            raise ValueError(
-                "HF_TOKEN environment variable not set. Please set it to your HuggingFace token."
-            )
+        """Initialize the OpenAI-compatible client."""
+        # Determine base URL and API key
+        # Priority: explicit base_url > OPENAI_BASE_URL env > HuggingFace router
+        base_url = self.base_url or os.environ.get("OPENAI_BASE_URL", "")
+
+        if base_url:
+            # Using custom endpoint (local LLM, vLLM, Ollama, etc.)
+            api_key = os.environ.get("OPENAI_API_KEY", "local")
+            self._api_model = self.model
+        else:
+            # Default to HuggingFace router
+            api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "No API key found. Set HF_TOKEN for HuggingFace or OPENAI_API_KEY for other providers."
+                )
+            base_url = "https://router.huggingface.co/v1"
+            # Use :novita suffix for HuggingFace router
+            self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
 
         self.client = OpenAI(
-            base_url="https://router.huggingface.co/v1",
+            base_url=base_url,
             api_key=api_key,
         )
-        # Use :novita suffix for actual API calls
-        self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
 
     def think(self, observation: InvestigationObservation, state: InvestigationState) -> str:
         """
@@ -255,8 +267,10 @@ Be thorough but efficient. You have limited steps."""
 def run_baseline_inference(
     environment: Any,
     difficulty: str = "all",
-    model: str = "Qwen/Qwen3.5-27B",
+    model: str = "Qwen/Qwen3.5-2B",
     num_episodes: int = 3,
+    max_steps: int = 15,
+    base_url: str = "",
 ) -> Dict[str, Any]:
     """
     Run baseline inference on the environment.
@@ -264,22 +278,27 @@ def run_baseline_inference(
     Args:
         environment: LogAnomalyEnvironment instance
         difficulty: Difficulty level ("easy", "medium", "hard", or "all")
-        model: Model to use for baseline (via HuggingFace router)
+        model: Model to use for baseline
         num_episodes: Number of episodes per difficulty
+        max_steps: Maximum steps per episode
+        base_url: OpenAI-compatible API base URL (empty for auto-detect)
 
     Returns:
         Baseline results dictionary
     """
-    api_key = os.environ.get("HF_TOKEN")
-    if not api_key:
+    # Check for API key (either HF_TOKEN or OPENAI_API_KEY)
+    api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+    has_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+
+    if not api_key and not has_base_url:
         return {
             "status": "error",
-            "message": "HF_TOKEN not set in environment",
+            "message": "No API key found. Set HF_TOKEN, OPENAI_API_KEY, or use --base-url for local LLMs",
             "baseline_scores": {},
         }
 
     # Create agent
-    agent = ReactAgent(model=model)
+    agent = ReactAgent(model=model, max_steps=max_steps, base_url=base_url)
 
     # Determine difficulties to test
     if difficulty == "all":
@@ -298,8 +317,17 @@ def run_baseline_inference(
             print(f"\nEpisode {episode_num + 1}/{num_episodes}")
 
             # Reset environment
-            obs_dict = environment.reset(difficulty=diff, seed=episode_num)
-            observation = _dict_to_observation(obs_dict["observation"])
+            obs_result = environment.reset(difficulty=diff, seed=episode_num)
+            # Handle both dict and object returns
+            if isinstance(obs_result, dict):
+                observation = _dict_to_observation(obs_result.get("observation", obs_result))
+            elif isinstance(obs_result, InvestigationObservation):
+                observation = obs_result
+            else:
+                # Try to convert from model
+                observation = _dict_to_observation(
+                    obs_result.model_dump() if hasattr(obs_result, "model_dump") else obs_result
+                )
             state = environment.state
 
             # Run agent
@@ -322,14 +350,15 @@ def run_baseline_inference(
 
                 # Execute action
                 result = environment.step(action)
-                obs_dict = (
-                    result
-                    if isinstance(result, dict)
-                    else {
-                        "observation": result.model_dump(),
-                    }
-                )
-                observation = _dict_to_observation(obs_dict["observation"])
+                # Handle both dict and object returns
+                if isinstance(result, dict):
+                    observation = _dict_to_observation(result.get("observation", result))
+                elif isinstance(result, InvestigationObservation):
+                    observation = result
+                else:
+                    observation = _dict_to_observation(
+                        result.model_dump() if hasattr(result, "model_dump") else result
+                    )
                 state = environment.state
 
             # Grade episode
@@ -379,8 +408,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         "-m",
-        default="Qwen/Qwen3.5-27B",
-        help="Model to use via HuggingFace router (default: Qwen/Qwen3.5-27B)",
+        default="Qwen/Qwen3.5-2B",
+        help="Model to use (default: Qwen/Qwen3.5-2B)",
     )
     parser.add_argument(
         "--episodes",
@@ -396,14 +425,28 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-key",
-        help="HuggingFace token (or set HF_TOKEN env var)",
+        help="API key (or set HF_TOKEN/OPENAI_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="OpenAI-compatible API base URL (e.g., http://localhost:11434/v1 for Ollama)",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=15,
+        help="Maximum steps per episode (default: 15)",
     )
 
     args = parser.parse_args()
 
     # Set API key if provided
     if args.api_key:
-        os.environ["HF_TOKEN"] = args.api_key
+        os.environ["OPENAI_API_KEY"] = args.api_key
+
+    # Set base URL if provided
+    if args.base_url:
+        os.environ["OPENAI_BASE_URL"] = args.base_url
 
     # Import environment
     from server.log_anomaly_environment import LogAnomalyEnvironment
@@ -422,6 +465,7 @@ def main() -> None:
         difficulty=args.difficulty,
         model=args.model,
         num_episodes=args.episodes,
+        max_steps=args.max_steps,
     )
 
     # Print results
