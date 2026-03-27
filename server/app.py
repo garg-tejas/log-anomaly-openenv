@@ -28,14 +28,15 @@ from models import LogAction, LogObservation
 
 # Create the app using OpenEnv's create_app (adds WebSocket /ws endpoint)
 # create_app expects a factory function, not a class
-def create_environment():
+def create_environment() -> LogAnomalyEnvironment:
+    """Factory function to create environment instances."""
     return LogAnomalyEnvironment()
 
 
 app = create_app(create_environment, LogAction, LogObservation, env_name="log_anomaly_env")
 
 
-def main():
+def main() -> None:
     """Run the server."""
     import uvicorn
 

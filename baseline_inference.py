@@ -502,7 +502,7 @@ def run_baseline_inference(
     model: str = "Qwen/Qwen3.5-2B",
     num_episodes: int = 3,
     max_steps: int = 15,
-    base_url: str = "",
+    base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run baseline inference on the environment.
@@ -530,7 +530,7 @@ def run_baseline_inference(
         }
 
     # Create agent
-    agent = ReactAgent(model=model, max_steps=max_steps, base_url=base_url)
+    agent = ReactAgent(model=model, max_steps=max_steps, base_url=base_url or "")
 
     # Determine difficulties to test
     if difficulty == "all":

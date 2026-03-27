@@ -5,7 +5,6 @@ This module provides the grading functionality for evaluating agent
 performance on log anomaly investigation tasks.
 """
 
-import json
 import sys
 import os
 from datetime import datetime
@@ -37,10 +36,6 @@ class InvestigationGrader:
     TYPE_WEIGHT = 0.25
     WINDOW_WEIGHT = 0.35
     EFFICIENCY_WEIGHT = 0.15
-
-    def __init__(self):
-        """Initialize the grader."""
-        pass
 
     def grade(
         self,

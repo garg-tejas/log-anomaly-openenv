@@ -18,7 +18,6 @@ import shutil
 import sys
 from typing import Any, Optional, Dict, List, Tuple
 from datetime import datetime
-from pathlib import Path
 
 # Add parent directory to path for imports
 _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,7 +26,6 @@ if _parent_dir not in sys.path:
 
 # Import OpenEnv base classes
 from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import Observation as BaseObservation
 
 
 from log_utils import (

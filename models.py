@@ -8,7 +8,7 @@ These models inherit from the OpenEnv base classes for spec compliance.
 """
 
 from typing import Optional, List, Dict, Any
-from pydantic import Field
+from pydantic import Field, BaseModel
 from enum import Enum
 
 # Import OpenEnv base classes
@@ -162,8 +162,6 @@ class LogState(_BaseState):
 # =============================================================================
 # Legacy Models (for backward compatibility with existing code)
 # =============================================================================
-
-from pydantic import BaseModel
 
 
 class BashCommand(BaseModel):
