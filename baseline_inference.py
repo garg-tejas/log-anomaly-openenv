@@ -122,37 +122,25 @@ class ReactAgent:
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the agent."""
-        return """You are an expert DevOps engineer investigating system logs for anomalies.
+        return """You are a DevOps engineer investigating log.txt for anomalies.
 
-LOG FORMAT: TIMESTAMP SEVERITY COMPONENT MESSAGE
-COMPONENTS: service_a, service_b, service_c, service_d
+ANOMALY TYPES: error_spike, memory_leak, latency_degradation, cascade_failure, service_dropout
 
-ANOMALY TYPES (identify exactly one):
-1. error_spike - Sudden burst of ERROR logs from ONE component
-2. memory_leak - "heap", "GC", "memory", "MB" with increasing numbers
-3. latency_degradation - "latency", "timeout", "ms" with high values
-4. cascade_failure - "cascaded failure", "dependency failure", "affected by"
-5. service_dropout - A component stops producing logs entirely
+To run a command, reply with ONLY a bash code block:
+```bash
+grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+```
 
-AVAILABLE COMMANDS: grep, awk, sed, sort, uniq, wc, head, tail, cut, cat
+To submit your answer, reply with ONLY a json code block:
+```json
+{"anomaly_type": "error_spike", "component": "service_a", "start_time": "2024-01-15T10:30:00", "end_time": "2024-01-15T10:35:00"}
+```
 
-WORKFLOW - Execute commands ONE AT A TIME, then submit:
-Step 1: Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
-Step 2: Command: grep -iE 'cascade|dependency|affected|latency|memory|heap' log.txt | head -15  
-Step 3: Command: grep ERROR log.txt | head -3 && grep ERROR log.txt | tail -3
-Step 4: Submit with ACTUAL timestamps from the logs you examined
-
-CRITICAL: Do NOT submit until you have:
-1. Identified which component has errors
-2. Checked for anomaly-specific keywords
-3. Found REAL timestamps from the log output
-
-OUTPUT FORMAT - Reply with exactly ONE line:
-Command: <bash command>
-OR
-Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "<from logs>", "end_time": "<from logs>"}
-
-NEVER use placeholder timestamps. Extract real timestamps from grep output."""
+RULES:
+1. Output exactly ONE code block per response
+2. No text before or after the code block
+3. Use real timestamps from the logs, never placeholders
+4. Investigate at least 3 commands before submitting"""
 
     def _build_thinking_prompt(
         self,
@@ -161,60 +149,24 @@ NEVER use placeholder timestamps. Extract real timestamps from grep output."""
     ) -> str:
         """Build the prompt for the current step."""
         prompt_parts = [
-            f"Episode: {state.episode_id}",
-            f"Steps remaining: {observation.steps_remaining}/{observation.total_steps}",
-            f"Task difficulty: {observation.task_difficulty.value}",
-            f"Answer submitted: {observation.answer_submitted}",
-            "",
+            f"Steps: {observation.total_steps - observation.steps_remaining}/{observation.total_steps}",
         ]
 
         if observation.command_history:
-            prompt_parts.append("=== COMMAND HISTORY ===")
-            for i, cmd_entry in enumerate(observation.command_history[-5:], 1):
-                prompt_parts.append(f"[{i}] Command: {cmd_entry['command']}")
-                if cmd_entry.get("error"):
-                    prompt_parts.append(f"    Error: {cmd_entry['output']}")
-                else:
-                    output = cmd_entry["output"]
-                    if len(output) > 500:
-                        output = (
-                            output[:500]
-                            + f"\n... [truncated, {len(cmd_entry['output'])} total chars]"
-                        )
-                    prompt_parts.append(f"    Output:\n{output}")
+            prompt_parts.append("\n=== HISTORY ===")
+            for cmd_entry in observation.command_history[-5:]:
+                prompt_parts.append(f"$ {cmd_entry['command']}")
+                output = cmd_entry["output"]
+                if len(output) > 400:
+                    output = output[:400] + "\n[truncated]"
+                prompt_parts.append(output)
             prompt_parts.append("")
 
-        if observation.command_output:
-            prompt_parts.append("=== LAST OUTPUT ===")
-            prompt_parts.append(observation.command_output[:1000])
+        if observation.command_output and not observation.command_history:
+            prompt_parts.append("=== OUTPUT ===")
+            prompt_parts.append(observation.command_output[:800])
 
-        # Add instruction based on investigation progress
-        has_history = bool(observation.command_history)
-
-        if not has_history:
-            prompt_parts.extend(
-                [
-                    "",
-                    "Start investigating. Reply with ONE command:",
-                    "Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn",
-                ]
-            )
-        elif len(observation.command_history) < 3:
-            prompt_parts.extend(
-                [
-                    "",
-                    "Continue investigating. Reply with ONE command or submit if you have real timestamps.",
-                    "Command: <your next bash command>",
-                ]
-            )
-        else:
-            prompt_parts.extend(
-                [
-                    "",
-                    "You have enough data. Submit your findings with REAL timestamps from the logs:",
-                    'Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "<real>", "end_time": "<real>"}',
-                ]
-            )
+        prompt_parts.append("\nReply with one code block:")
 
         return "\n".join(prompt_parts)
 
@@ -224,11 +176,10 @@ NEVER use placeholder timestamps. Extract real timestamps from grep output."""
         """
         Parse the agent's thought into an action.
 
-        Handles multiple output formats:
-        1. Standard "Command: <cmd>" or "Submit: <json>" format
-        2. Qwen thinking mode with </think> tag followed by bare command
-        3. Fenced code blocks with bash commands
-        4. Direct JSON submissions
+        Simplified parser that ONLY looks for fenced code blocks:
+        - ```bash ... ``` -> bash command
+        - ```json ... ``` -> submit answer
+        - ```  ... ```    -> try to detect type from content
 
         Args:
             thought: The agent's reasoning text
@@ -237,151 +188,73 @@ NEVER use placeholder timestamps. Extract real timestamps from grep output."""
         Returns:
             InvestigationAction to execute
         """
-        # Clean up common artifacts
-        thought = thought.replace("```json", "").replace("```", "").strip()
-
-        # Common bash commands to recognize (for bare command detection)
-        BASH_COMMANDS = (
-            "grep",
-            "awk",
-            "sed",
-            "cat",
-            "head",
-            "tail",
-            "wc",
-            "cut",
-            "sort",
-            "uniq",
-            "find",
-            "ls",
-            "echo",
-            "less",
-            "more",
-        )
-
-        # === STEP 1: Handle Qwen thinking mode ===
-        # Extract content after </think> tag - this is the actual response
+        # Handle Qwen thinking mode - extract content after </think>
         if "</think>" in thought:
-            # Get everything after the last </think> tag
-            post_think = thought.split("</think>")[-1].strip()
-            if post_think:
-                # Check for Submit in post-think content
-                if "submit" in post_think.lower() or '"anomaly_type"' in post_think:
-                    answer_data = self._extract_submit_json(post_think)
-                    if answer_data:
-                        try:
-                            return InvestigationAction(
-                                action_type="submit",
-                                answer=SubmitAnswer(
-                                    anomaly_type=AnomalyType(
-                                        answer_data.get("anomaly_type", "error_spike")
-                                    ),
-                                    component=answer_data.get("component", "unknown"),
-                                    start_time=answer_data.get("start_time", ""),
-                                    end_time=answer_data.get("end_time", ""),
-                                ),
-                            )
-                        except (ValueError, KeyError):
-                            pass
+            thought = thought.split("</think>")[-1].strip()
 
-                # Check for "Command:" prefix in post-think
-                cmd_match = re.search(r"(?:Command|command):\s*([^\n]+)", post_think)
-                if cmd_match:
-                    command = cmd_match.group(1).strip().strip("`*").strip()
-                    if command and command not in {"*", "**", "***"}:
+        # === STEP 1: Look for fenced code blocks ===
+        # Match ```bash, ```json, or plain ``` code blocks
+        code_block_pattern = r"```(\w*)\n(.*?)```"
+        matches = re.findall(code_block_pattern, thought, re.DOTALL | re.IGNORECASE)
+
+        for lang, content in matches:
+            content = content.strip()
+            if not content:
+                continue
+
+            lang = lang.lower()
+
+            # JSON block = submit
+            if lang == "json" or content.startswith("{"):
+                answer_data = self._extract_submit_json(content)
+                if answer_data:
+                    try:
                         return InvestigationAction(
-                            action_type="bash",
-                            bash_command=BashCommand(command=command),
-                        )
-
-                # Check for bare bash command (no prefix) after </think>
-                first_line = post_think.split("\n")[0].strip()
-                if first_line and first_line.split()[0] in BASH_COMMANDS:
-                    return InvestigationAction(
-                        action_type="bash",
-                        bash_command=BashCommand(command=first_line),
-                    )
-
-        # === STEP 2: Check for Submit (whole response) ===
-        if "submit" in thought.lower() or '"anomaly_type"' in thought:
-            answer_data = self._extract_submit_json(thought)
-            if answer_data:
-                try:
-                    return InvestigationAction(
-                        action_type="submit",
-                        answer=SubmitAnswer(
-                            anomaly_type=AnomalyType(
-                                answer_data.get("anomaly_type", "error_spike")
+                            action_type="submit",
+                            answer=SubmitAnswer(
+                                anomaly_type=AnomalyType(
+                                    answer_data.get("anomaly_type", "error_spike")
+                                ),
+                                component=answer_data.get("component", "unknown"),
+                                start_time=answer_data.get("start_time", ""),
+                                end_time=answer_data.get("end_time", ""),
                             ),
-                            component=answer_data.get("component", "unknown"),
-                            start_time=answer_data.get("start_time", ""),
-                            end_time=answer_data.get("end_time", ""),
-                        ),
-                    )
-                except (ValueError, KeyError):
-                    pass
+                        )
+                    except (ValueError, KeyError):
+                        pass
 
-        # === STEP 3: Extract "Command:" prefixed bash command ===
-        command_match = re.search(r"(?:Command|command):\s*([^\n]+)", thought)
-        if command_match:
-            command = command_match.group(1).strip()
-            # Strip common markdown wrappers/noise
-            command = command.strip("`*").strip()
-            if command and command not in {"*", "**", "***"}:
-                return InvestigationAction(
-                    action_type="bash",
-                    bash_command=BashCommand(command=command),
-                )
-
-        # === STEP 4: Extract from fenced code blocks ===
-        code_block_match = re.search(r"```(?:bash)?\n([^`\n]+)", thought, re.IGNORECASE)
-        if code_block_match:
-            command = code_block_match.group(1).strip().strip("`*").strip()
-            if command and command not in {"*", "**", "***"}:
-                return InvestigationAction(
-                    action_type="bash",
-                    bash_command=BashCommand(command=command),
-                )
-
-        # === STEP 5: Try bare command detection (last resort before fallback) ===
-        # Look for lines that start with common bash commands
-        for line in thought.split("\n"):
-            line = line.strip()
-            if line and not line.startswith("#"):
-                first_word = line.split()[0] if line.split() else ""
-                if first_word in BASH_COMMANDS:
+            # Bash block or unlabeled block = command
+            if lang in ("bash", "sh", "") and not content.startswith("{"):
+                # Take first line as command (in case model adds comments)
+                command = content.split("\n")[0].strip()
+                if command:
                     return InvestigationAction(
                         action_type="bash",
-                        bash_command=BashCommand(command=line),
+                        bash_command=BashCommand(command=command),
                     )
 
-        # Check for command deduplication - avoid repeating recent commands
+        # === STEP 2: Fallback - use default investigation commands ===
+        return self._get_fallback_action(observation)
+
+    def _get_fallback_action(self, observation: InvestigationObservation) -> InvestigationAction:
+        """Get a fallback investigation command based on current step."""
         recent_commands = [
             entry.get("command", "") for entry in (observation.command_history or [])[-3:]
         ]
 
-        # Default investigation commands - ordered for optimal anomaly detection
-        # 1. Understand log structure and size
-        # 2. Count and identify error sources
-        # 3. Check for specific anomaly patterns (cascade, memory, latency)
-        # 4. Get error timestamps for time window
-        step = len(observation.command_history)
+        step = len(observation.command_history or [])
         default_commands = [
-            # Step 0: Get log structure and error counts by component
-            "wc -l log.txt && head -10 log.txt",
-            # Step 1: Which component has most errors?
+            # Step 0: Get error counts by component
             "grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn",
-            # Step 2: Check for CASCADE patterns (critical for hard tasks)
-            "grep -iE 'cascade|dependency|affected by|waiting for|circuit breaker|degraded mode' log.txt | head -15",
-            # Step 3: Check for LATENCY patterns
-            "grep -iE 'latency|timeout|[0-9]+ms|response time|slow' log.txt | head -15",
-            # Step 4: Check for MEMORY patterns
-            "grep -iE 'memory|heap|gc|[0-9]+mb|outofmemory' log.txt | head -15",
-            # Step 5: Get ERROR timestamps (first and last for time window)
+            # Step 1: Check for CASCADE patterns
+            "grep -iE 'cascade|dependency|affected by|circuit breaker' log.txt | head -15",
+            # Step 2: Check for LATENCY patterns
+            "grep -iE 'latency|timeout|[0-9]+ms|slow' log.txt | head -15",
+            # Step 3: Check for MEMORY patterns
+            "grep -iE 'memory|heap|gc|[0-9]+mb' log.txt | head -15",
+            # Step 4: Get ERROR timestamps
             "grep ERROR log.txt | head -5 && echo '---' && grep ERROR log.txt | tail -5",
-            # Step 6: Get WARN timestamps
-            "grep WARN log.txt | head -5 && echo '---' && grep WARN log.txt | tail -5",
-            # Step 7: Full error details
+            # Step 5: Full error details
             "grep -E 'ERROR|FATAL' log.txt | head -20",
         ]
 
@@ -393,7 +266,6 @@ NEVER use placeholder timestamps. Extract real timestamps from grep output."""
                     bash_command=BashCommand(command=cmd),
                 )
 
-        # Last resort
         return InvestigationAction(
             action_type="bash",
             bash_command=BashCommand(command=default_commands[0]),
