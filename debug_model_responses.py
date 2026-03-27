@@ -42,8 +42,10 @@ class DebugReactAgent(ReactAgent):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.debug_log: List[Dict[str, Any]] = []
-        self.current_episode_log: List[Dict[str, Any]] = []
+        self.debug_log: List[
+            List[Dict[str, Any]]
+        ] = []  # List of episodes (each episode is a list of step dicts)
+        self.current_episode_log: List[Dict[str, Any]] = []  # Current episode's step dicts
 
     def think(self, observation: InvestigationObservation, state: InvestigationState) -> str:
         """Override to capture raw model output."""
@@ -336,10 +338,45 @@ def main():
     # Create debug agent
     agent = DebugReactAgent(base_url=base_url, api_key=api_key, model=args.model)
 
-    # Import environment client
-    from client import LogAnomalyEnv
+    # Import environment (direct environment, not client)
+    from server.log_anomaly_environment import LogAnomalyEnvironment
+    from models import EnvironmentMode, DifficultyLevel
 
-    env = LogAnomalyEnv(base_url="http://localhost:8000")
+    # Helper function to convert LogState to InvestigationState
+    def log_state_to_investigation(log_state):
+        return InvestigationState(
+            episode_id=log_state.episode_id or "",
+            step_count=log_state.step_count,
+            log_file_path=log_state.log_file_path,
+            task_id=log_state.task_id,
+            mode=EnvironmentMode(log_state.mode)
+            if isinstance(log_state.mode, str)
+            else log_state.mode,
+        )
+
+    # Helper function to convert LogObservation to InvestigationObservation
+    def log_obs_to_investigation(log_obs, log_state):
+        # Extract command history from metadata
+        cmd_history = []
+        if hasattr(log_obs, "metadata") and log_obs.metadata:
+            cmd_history = log_obs.metadata.get("command_history", [])
+
+        return InvestigationObservation(
+            command_output=log_obs.command_output,
+            command_history=cmd_history,
+            steps_remaining=log_obs.steps_remaining,
+            total_steps=log_obs.total_steps,
+            answer_submitted=log_obs.answer_submitted,
+            task_difficulty=DifficultyLevel(log_obs.task_difficulty)
+            if isinstance(log_obs.task_difficulty, str)
+            else log_obs.task_difficulty,
+            episode_reward=log_obs.reward,
+            mode=EnvironmentMode(log_state.mode)
+            if isinstance(log_state.mode, str)
+            else log_state.mode,
+        )
+
+    env = LogAnomalyEnvironment()
 
     # Run episodes
     for ep in range(args.episodes):
@@ -348,46 +385,26 @@ def main():
         print(f"{'=' * 60}")
 
         # Reset environment
-        result = env.reset(difficulty=args.difficulty, mode="eval")
-        obs_dict = result["observation"]
-        episode_id = result["episode_id"]
+        log_observation = env.reset(difficulty=args.difficulty, seed=ep)
+        log_state = env.state
 
-        # Convert to InvestigationObservation
-        from models import InvestigationObservation, DifficultyLevel, EnvironmentMode
-
-        obs = InvestigationObservation(
-            command_output=obs_dict.get("command_output", ""),
-            command_history=[],
-            steps_remaining=obs_dict.get("steps_remaining", 15),
-            total_steps=obs_dict.get("total_steps", 15),
-            answer_submitted=obs_dict.get("answer_submitted", False),
-            task_difficulty=DifficultyLevel(obs_dict.get("task_difficulty", "easy")),
-            episode_reward=0.0,
-            mode=EnvironmentMode.EVAL,
-        )
+        # Convert to Investigation types
+        observation = log_obs_to_investigation(log_observation, log_state)
+        state = log_state_to_investigation(log_state)
 
         # Start episode tracking
-        agent.start_episode(episode_id, args.difficulty)
-
-        # Get state
-        state_result = env.state()
-        state = InvestigationState(
-            episode_id=state_result.get("episode_id", ""),
-            step_count=state_result.get("step_count", 0),
-            log_file_path=state_result.get("log_file_path"),
-        )
+        agent.start_episode(state.episode_id, args.difficulty)
 
         # Run episode
         step = 0
-        done = False
-        max_steps = obs.total_steps
+        max_steps = 15
 
-        while not done and step < max_steps:
+        while not observation.answer_submitted and step < max_steps:
             step += 1
 
             # Agent thinks and acts
-            thought = agent.think(obs, state)
-            action = agent.parse_action(thought, obs)
+            thought = agent.think(observation, state)
+            action = agent.parse_action(thought, observation)
 
             print(f"  Step {step}: ", end="")
             if action.action_type == "bash" and action.bash_command:
@@ -395,34 +412,30 @@ def main():
             elif action.action_type == "submit":
                 print(f"Submitting answer")
 
-            # Convert to LogAction and execute
+            # Execute action
             log_action = action.to_log_action()
-            result = env.step(log_action)
+            log_observation = env.step(log_action)
+            log_state = env.state
 
-            obs_dict = result["observation"]
-            done = result.get("done", False)
+            # Convert to Investigation types
+            observation = log_obs_to_investigation(log_observation, log_state)
+            state = log_state_to_investigation(log_state)
 
-            # Update observation
-            obs = InvestigationObservation(
-                command_output=obs_dict.get("command_output", ""),
-                command_history=obs_dict.get("metadata", {}).get("command_history", []),
-                steps_remaining=obs_dict.get("steps_remaining", 0),
-                total_steps=obs_dict.get("total_steps", 15),
-                answer_submitted=obs_dict.get("answer_submitted", False),
-                task_difficulty=DifficultyLevel(obs_dict.get("task_difficulty", "easy")),
-                episode_reward=result.get("reward", 0.0),
-                mode=EnvironmentMode.EVAL,
-            )
+        # Get final result
+        episode_result = env.get_result()
 
-            state.step_count = step
+        print(f"  Result: reward={episode_result.reward:.4f}")
 
-        # Get final grading
-        grade_result = env.grade(episode_id)
-
-        print(f"  Result: reward={grade_result.get('reward', 0.0):.4f}")
-
-        # End episode tracking
-        agent.end_episode(grade_result)
+        # End episode tracking - convert to dict
+        result_dict = {
+            "reward": episode_result.reward,
+            "component_score": episode_result.component_score,
+            "type_score": episode_result.type_score,
+            "window_score": episode_result.window_score,
+            "efficiency_score": episode_result.efficiency_score,
+            "steps_used": episode_result.steps_used,
+        }
+        agent.end_episode(result_dict)
 
     # Analyze and report
     print("\n" + "=" * 80)
