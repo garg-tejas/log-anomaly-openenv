@@ -40,8 +40,8 @@ This environment simulates a realistic log investigation scenario where an agent
 
 ```bash
 # Clone the repository
-git clone https://github.com/openenv/log-anomaly-env.git
-cd log-anomaly-env
+git clone https://github.com/garg-tejas/log-anomaly-openenv.git
+cd log-anomaly-openenv
 
 # Install dependencies
 pip install -e ".[all]"
