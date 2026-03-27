@@ -40,7 +40,7 @@ class DebugReactAgent(ReactAgent):
     Extended ReactAgent that captures raw model responses for debugging.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.debug_log: List[
             List[Dict[str, Any]]
@@ -143,7 +143,7 @@ class DebugReactAgent(ReactAgent):
 
         return action
 
-    def start_episode(self, episode_id: str, difficulty: str):
+    def start_episode(self, episode_id: str, difficulty: str) -> None:
         """Start tracking a new episode."""
         self.current_episode_log = []
         self.current_episode_log.append(
@@ -154,7 +154,7 @@ class DebugReactAgent(ReactAgent):
             }
         )
 
-    def end_episode(self, result: Dict[str, Any]):
+    def end_episode(self, result: Dict[str, Any]) -> None:
         """Finish episode and save debug log."""
         self.current_episode_log.append(
             {
@@ -237,7 +237,7 @@ def analyze_debug_log(debug_log: List[List[Dict[str, Any]]]) -> Dict[str, Any]:
     return analysis
 
 
-def print_debug_report(analysis: Dict[str, Any]):
+def print_debug_report(analysis: Dict[str, Any]) -> None:
     """
     Print a human-readable debug report.
     """
@@ -288,7 +288,7 @@ def print_debug_report(analysis: Dict[str, Any]):
     print("\n" + "=" * 80)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Debug model responses during baseline inference")
     parser.add_argument(
         "--model",
