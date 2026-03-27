@@ -29,7 +29,6 @@ RUN pip install --no-cache-dir -e /app
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app:$PYTHONPATH
 ENV LOG_LEVEL=INFO
 
 # Create output directories
