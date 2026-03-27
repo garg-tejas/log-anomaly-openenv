@@ -124,41 +124,35 @@ class ReactAgent:
         """Get the system prompt for the agent."""
         return """You are an expert DevOps engineer investigating system logs for anomalies.
 
-LOG FORMAT:
-Each line: TIMESTAMP SEVERITY COMPONENT MESSAGE
-Example: 2026-03-26T17:30:00.123456 ERROR service_a Connection timeout
+LOG FORMAT: TIMESTAMP SEVERITY COMPONENT MESSAGE
+COMPONENTS: service_a, service_b, service_c, service_d
 
-COMPONENTS: service_a, service_b, service_c, service_d (extract from 3rd field)
-
-ANOMALY TYPES (you must identify exactly one):
+ANOMALY TYPES (identify exactly one):
 1. error_spike - Sudden burst of ERROR logs from ONE component
-2. memory_leak - Look for "heap", "GC", "memory", "MB" with increasing numbers
-3. latency_degradation - Look for "latency", "timeout", "ms" with high values
-4. cascade_failure - Keywords: "cascaded failure", "dependency failure", "affected by"
+2. memory_leak - "heap", "GC", "memory", "MB" with increasing numbers
+3. latency_degradation - "latency", "timeout", "ms" with high values
+4. cascade_failure - "cascaded failure", "dependency failure", "affected by"
 5. service_dropout - A component stops producing logs entirely
 
 AVAILABLE COMMANDS: grep, awk, sed, sort, uniq, wc, head, tail, cut, cat
 
-OUTPUT FORMAT - You MUST reply with EXACTLY ONE of these two formats:
+WORKFLOW - Execute commands ONE AT A TIME, then submit:
+Step 1: Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+Step 2: Command: grep -iE 'cascade|dependency|affected|latency|memory|heap' log.txt | head -15  
+Step 3: Command: grep ERROR log.txt | head -3 && grep ERROR log.txt | tail -3
+Step 4: Submit with ACTUAL timestamps from the logs you examined
 
-For bash commands:
-Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+CRITICAL: Do NOT submit until you have:
+1. Identified which component has errors
+2. Checked for anomaly-specific keywords
+3. Found REAL timestamps from the log output
 
-For final submission:
-Submit: {"anomaly_type": "error_spike", "component": "service_a", "start_time": "2026-03-26T17:30:00", "end_time": "2026-03-26T17:45:00"}
+OUTPUT FORMAT - Reply with exactly ONE line:
+Command: <bash command>
+OR
+Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "<from logs>", "end_time": "<from logs>"}
 
-INVESTIGATION STEPS:
-1. Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
-2. Command: grep -iE 'cascade|dependency|affected|latency|memory|heap' log.txt | head -15
-3. Command: grep ERROR log.txt | head -5 && grep ERROR log.txt | tail -5
-4. Submit with your findings
-
-RULES:
-- Always prefix commands with "Command: "
-- Always prefix submissions with "Submit: "
-- component must be exact: service_a, service_b, service_c, or service_d
-- start_time/end_time from ERROR log timestamps
-- NO explanations after the Command/Submit line"""
+NEVER use placeholder timestamps. Extract real timestamps from grep output."""
 
     def _build_thinking_prompt(
         self,
@@ -194,14 +188,33 @@ RULES:
             prompt_parts.append("=== LAST OUTPUT ===")
             prompt_parts.append(observation.command_output[:1000])
 
-        prompt_parts.extend(
-            [
-                "",
-                "Reply with EXACTLY one line in one of these formats:",
-                "Command: <your bash command here>",
-                'Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "...", "end_time": "..."}',
-            ]
-        )
+        # Add instruction based on investigation progress
+        has_history = bool(observation.command_history)
+
+        if not has_history:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Start investigating. Reply with ONE command:",
+                    "Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn",
+                ]
+            )
+        elif len(observation.command_history) < 3:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Continue investigating. Reply with ONE command or submit if you have real timestamps.",
+                    "Command: <your next bash command>",
+                ]
+            )
+        else:
+            prompt_parts.extend(
+                [
+                    "",
+                    "You have enough data. Submit your findings with REAL timestamps from the logs:",
+                    'Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "<real>", "end_time": "<real>"}',
+                ]
+            )
 
         return "\n".join(prompt_parts)
 
