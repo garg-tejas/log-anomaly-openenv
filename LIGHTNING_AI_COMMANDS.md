@@ -2,6 +2,8 @@
 
 This document provides the **exact order of commands** to run baseline inference on Lightning AI with an L4 GPU.
 
+**📋 For debugging model response parsing issues, see [DEBUG_INSTRUCTIONS.md](DEBUG_INSTRUCTIONS.md)**
+
 ---
 
 ## Prerequisites
