@@ -2,12 +2,11 @@
 FastAPI Application for Log Anomaly Investigation Environment.
 
 This module creates an HTTP server that exposes the LogAnomalyEnvironment
-over REST endpoints following the OpenEnv specification.
+using the OpenEnv spec with WebSocket support.
 """
 
 import os
 import sys
-from typing import Any, Dict, Optional, List
 
 # Load environment variables from .env file if present
 try:
@@ -15,318 +14,218 @@ try:
 
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed, use system env vars only
+    pass
 
 # Add parent directory to path for imports when running directly
 _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+# Try to use OpenEnv's create_app, fallback to custom implementation
+try:
+    from openenv.core.env_server import create_app
+    from server.log_anomaly_environment import LogAnomalyEnvironment
+    from models import LogAction, LogObservation
 
-from server.log_anomaly_environment import LogAnomalyEnvironment
-from models import (
-    InvestigationAction,
-    InvestigationObservation,
-    InvestigationState,
-    EpisodeResult,
-    AnomalyType,
-    DifficultyLevel,
-    SubmitAnswer,
-    BashCommand,
-)
+    # Create the app using OpenEnv's create_app (adds WebSocket /ws endpoint)
+    app = create_app(LogAnomalyEnvironment, LogAction, LogObservation, env_name="log_anomaly_env")
 
-# Create FastAPI app
-app = FastAPI(
-    title="Log Anomaly Investigation Environment",
-    description="""
-    A real-world OpenEnv environment for training AI agents to investigate
-    log anomalies using bash command exploration.
+except ImportError:
+    # Fallback: Use custom FastAPI implementation for local development
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    from typing import Any, Dict, Optional
 
-    ## Features
-    - Realistic log investigation scenarios
-    - Multiple difficulty levels (easy, medium, hard)
-    - Sandboxed bash command execution
-    - Automated grading with multi-axis scoring
-    - Baseline inference support
+    from server.log_anomaly_environment import LogAnomalyEnvironment
+    from models import (
+        LogAction,
+        LogObservation,
+        InvestigationAction,
+        BashCommand,
+        SubmitAnswer,
+        AnomalyType,
+        DifficultyLevel,
+    )
 
-    ## Quick Start
-    1. POST /reset - Start a new investigation episode
-    2. POST /step - Execute bash commands or submit answers
-    3. GET /tasks - List available tasks
-    4. GET /grade/{episode_id} - Get grading results
-    5. POST /grader - Grade the current episode
-    """,
-    version="1.0.0",
-)
+    app = FastAPI(
+        title="Log Anomaly Investigation Environment",
+        description="A real-world OpenEnv environment for training AI agents to investigate log anomalies.",
+        version="1.0.0",
+    )
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# Initialize environment
-environment = LogAnomalyEnvironment()
+    # Initialize environment
+    environment = LogAnomalyEnvironment()
 
+    class ResetRequest(BaseModel):
+        difficulty: str = "easy"
+        seed: Optional[int] = None
+        task_id: Optional[str] = None
+        episode_id: Optional[str] = None
+        mode: str = "eval"
+        data_source: str = "synthetic"
+        log_source: Optional[str] = None
 
-# Request/Response models for endpoints
-class ResetRequest(BaseModel):
-    """Request body for reset endpoint."""
+    class StepRequest(BaseModel):
+        episode_id: Optional[str] = None
+        action_type: str
+        command: Optional[str] = None  # For bash actions
+        anomaly_type: Optional[str] = None  # For submit actions
+        component: Optional[str] = None
+        start_time: Optional[str] = None
+        end_time: Optional[str] = None
+        confidence: float = 1.0
 
-    difficulty: str = "easy"
-    seed: Optional[int] = None
-    task_id: Optional[str] = None
-    episode_id: Optional[str] = None
-    mode: str = "eval"  # "training" or "eval"
-    data_source: str = "synthetic"  # "synthetic" or "loghub"
-    log_source: Optional[str] = None  # "HDFS", "BGL", "OpenStack", "Apache"
+    class BaselineRequest(BaseModel):
+        difficulty: str = "all"
+        model: str = "Qwen/Qwen3.5-2B"
+        num_episodes: int = 5
 
+    @app.get("/health")
+    async def health_check():
+        return {"status": "healthy", "service": "log-anomaly-env"}
 
-class StepRequest(BaseModel):
-    """Request body for step endpoint."""
+    @app.post("/reset")
+    async def reset_environment(request: ResetRequest) -> Dict[str, Any]:
+        try:
+            observation = environment.reset(
+                seed=request.seed,
+                episode_id=request.episode_id,
+                difficulty=request.difficulty,
+                task_id=request.task_id,
+                mode=request.mode,
+                data_source=request.data_source,
+                log_source=request.log_source,
+            )
+            return {
+                "observation": observation.model_dump(),
+                "episode_id": environment.state.episode_id,
+                "reward": observation.reward,
+                "done": observation.done,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
-    episode_id: Optional[str] = None  # Episode ID for thread safety
-    action_type: str
-    bash_command: Optional[BashCommand] = None
-    answer: Optional[SubmitAnswer] = None
+    @app.post("/step")
+    async def step_environment(request: StepRequest) -> Dict[str, Any]:
+        try:
+            episode_id = request.episode_id or environment.state.episode_id
+            if not episode_id or episode_id not in environment.episodes:
+                raise HTTPException(
+                    status_code=400, detail="Invalid episode_id. Call /reset first."
+                )
 
+            episode = environment.episodes[episode_id]
 
-class BaselineRequest(BaseModel):
-    """Request body for baseline endpoint."""
-
-    difficulty: str = "all"
-    model: str = "Qwen/Qwen3.5-2B"
-    num_episodes: int = 5
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "log-anomaly-env"}
-
-
-@app.post("/reset")
-async def reset_environment(request: ResetRequest) -> Dict[str, Any]:
-    """
-    Reset the environment and start a new episode.
-
-    Args:
-        request: Reset parameters including difficulty, seed, task_id
-
-    Returns:
-        Initial observation and metadata
-    """
-    try:
-        observation = environment.reset(
-            seed=request.seed,
-            difficulty=request.difficulty,
-            episode_id=request.episode_id,
-            task_id=request.task_id,
-            mode=request.mode,
-            data_source=request.data_source,
-            log_source=request.log_source,
-        )
-
-        # Build response with mode-appropriate metadata
-        # In EVAL mode: NO ground truth hints (prevents cheating)
-        # In TRAINING mode: General difficulty hints only
-        response_metadata = {
-            "log_file": "log.txt",
-            "difficulty": request.difficulty,
-            "mode": request.mode,
-            "data_source": request.data_source,
-        }
-
-        # Add log_source if specified
-        if request.log_source:
-            response_metadata["log_source"] = request.log_source
-
-        return {
-            "observation": observation.model_dump(),
-            "episode_id": environment.state.episode_id,
-            "metadata": response_metadata,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/step")
-async def step_environment(request: StepRequest) -> Dict[str, Any]:
-    """
-    Execute an action in the environment.
-
-    Args:
-        request: Action to execute (bash command or submit answer)
-
-    Returns:
-        Observation and reward
-    """
-    try:
-        # Use provided episode_id or fall back to current
-        episode_id = request.episode_id or environment.state.episode_id
-
-        if not episode_id or episode_id not in environment.episodes:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid episode_id. Call /reset first. Got: {episode_id}"
+            # Build LogAction from request
+            action = LogAction(
+                action_type=request.action_type,
+                command=request.command,
+                anomaly_type=request.anomaly_type,
+                component=request.component,
+                start_time=request.start_time,
+                end_time=request.end_time,
+                confidence=request.confidence,
             )
 
-        # Get the specific episode
-        episode = environment.episodes[episode_id]
+            observation = episode.step(action)
+            environment._state.step_count = episode.step_count
 
-        # Build InvestigationAction from request
-        action = InvestigationAction(
-            action_type=request.action_type,
-            bash_command=request.bash_command,
-            answer=request.answer,
-        )
+            return {
+                "observation": observation.model_dump(),
+                "episode_id": episode_id,
+                "reward": observation.reward,
+                "done": observation.done,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
-        # Execute on the specific episode
-        observation = episode.step(action)
-        environment.state.step_count = episode.step_count
+    @app.get("/state")
+    async def get_state() -> Dict[str, Any]:
+        try:
+            state = environment.state
+            return state.model_dump()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
+    @app.get("/tasks")
+    async def list_tasks() -> Dict[str, Any]:
+        try:
+            tasks = environment.list_tasks()
+            return {"tasks": tasks}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/grade/{episode_id}")
+    async def grade_episode(episode_id: str) -> Dict[str, Any]:
+        try:
+            result = environment.grade(episode_id)
+            return result.model_dump()
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @app.post("/grader")
+    async def grader_endpoint() -> Dict[str, Any]:
+        try:
+            if environment.episode is None:
+                raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
+            episode_id = environment.state.episode_id
+            result = environment.grade(episode_id)
+            return result.model_dump()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/baseline")
+    async def run_baseline(request: BaselineRequest) -> Dict[str, Any]:
+        try:
+            from baseline_inference import run_baseline_inference
+
+            results = run_baseline_inference(
+                environment=environment,
+                difficulty=request.difficulty,
+                model=request.model,
+                num_episodes=request.num_episodes,
+            )
+            return results
+        except ImportError:
+            raise HTTPException(
+                status_code=501,
+                detail="Baseline inference not available. Please install openai package.",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/")
+    async def root():
         return {
-            "observation": observation.model_dump(),
-            "episode_id": episode_id,
-            "reward": observation.episode_reward,
-            "done": observation.answer_submitted,
+            "name": "Log Anomaly Investigation Environment",
+            "version": "1.0.0",
+            "description": "A real-world OpenEnv environment for training AI agents to investigate log anomalies",
+            "endpoints": {
+                "health": "GET /health",
+                "reset": "POST /reset",
+                "step": "POST /step",
+                "state": "GET /state",
+                "tasks": "GET /tasks",
+                "grade": "GET /grade/{episode_id}",
+                "grader": "POST /grader",
+                "baseline": "POST /baseline",
+            },
+            "anomaly_types": [t.value for t in AnomalyType],
+            "difficulty_levels": [d.value for d in DifficultyLevel],
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/state")
-async def get_state() -> Dict[str, Any]:
-    """
-    Get current environment state.
-
-    Returns:
-        Current state information
-    """
-    try:
-        state = environment.state
-        return {
-            "episode_id": state.episode_id,
-            "step_count": state.step_count,
-            "log_file_path": state.log_file_path,
-            "task_id": state.task_id,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/tasks")
-async def list_tasks() -> Dict[str, Any]:
-    """
-    List all available tasks.
-
-    Returns:
-        Task definitions and schemas
-    """
-    try:
-        tasks = environment.list_tasks()
-        return {"tasks": tasks}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/grade/{episode_id}")
-async def grade_episode(episode_id: str) -> Dict[str, Any]:
-    """
-    Grade a completed episode.
-
-    Args:
-        episode_id: Episode to grade
-
-    Returns:
-        Grading results with scores
-    """
-    try:
-        result = environment.grade(episode_id)
-        return result.model_dump()
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@app.post("/grader")
-async def grader_endpoint() -> Dict[str, Any]:
-    """
-    Grade the current episode.
-
-    Returns:
-        Grading results with scores for the current episode
-    """
-    try:
-        if environment.episode is None:
-            raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
-
-        episode_id = environment.state.episode_id
-        result = environment.grade(episode_id)
-        return result.model_dump()
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/baseline")
-async def run_baseline(request: BaselineRequest) -> Dict[str, Any]:
-    """
-    Run baseline inference on the environment.
-
-    Args:
-        request: Baseline parameters (difficulty, model, num_episodes)
-
-    Returns:
-        Baseline results
-    """
-    try:
-        from baseline_inference import run_baseline_inference
-
-        results = run_baseline_inference(
-            environment=environment,
-            difficulty=request.difficulty,
-            model=request.model,
-            num_episodes=request.num_episodes,
-        )
-        return results
-    except ImportError:
-        raise HTTPException(
-            status_code=501,
-            detail="Baseline inference not available. Please install openai package.",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/")
-async def root():
-    """Root endpoint with API information."""
-    return {
-        "name": "Log Anomaly Investigation Environment",
-        "version": "1.0.0",
-        "description": "A real-world OpenEnv environment for training AI agents to investigate log anomalies",
-        "endpoints": {
-            "health": "GET /health",
-            "reset": "POST /reset",
-            "step": "POST /step",
-            "state": "GET /state",
-            "tasks": "GET /tasks",
-            "grade": "GET /grade/{episode_id}",
-            "grader": "POST /grader",
-            "baseline": "POST /baseline",
-        },
-        "anomaly_types": [t.value for t in AnomalyType],
-        "difficulty_levels": [d.value for d in DifficultyLevel],
-    }
 
 
 def main():

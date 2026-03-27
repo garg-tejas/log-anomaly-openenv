@@ -25,6 +25,26 @@ _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
+# Import OpenEnv base classes
+try:
+    from openenv.core.env_server.interfaces import Environment
+    from openenv.core.env_server.types import Observation as BaseObservation
+except ImportError:
+    # Fallback for standalone development
+    class Environment:
+        """Base environment class (fallback)."""
+
+        def reset(self, **kwargs) -> Any:
+            raise NotImplementedError
+
+        def step(self, action: Any, **kwargs) -> Any:
+            raise NotImplementedError
+
+        @property
+        def state(self) -> Any:
+            raise NotImplementedError
+
+
 from log_utils import (
     LogParser,
     AnomalyInjector,
@@ -32,6 +52,9 @@ from log_utils import (
 )
 from grader import InvestigationGrader, TaskGenerator
 from models import (
+    LogAction,
+    LogObservation,
+    LogState,
     InvestigationAction,
     InvestigationObservation,
     InvestigationState,
@@ -144,14 +167,12 @@ class InvestigationEpisode:
             for line in self.log_lines:
                 f.write(line.raw_line + "\n")
 
-    def reset(self) -> InvestigationObservation:
+    def reset(self) -> LogObservation:
         """
         Reset the episode state.
 
         Returns:
             Initial observation with mode-appropriate hints only.
-            In EVAL mode: No ground truth hints are provided.
-            In TRAINING mode: General difficulty hints only (no specific answers).
         """
         self.step_count = 0
         self.command_history = []
@@ -163,34 +184,31 @@ class InvestigationEpisode:
         metadata = {
             "log_file": "log.txt",
             "log_lines": len(self.log_lines),
+            "mode": self.mode.value,
+            "data_source": self.data_source.value,
+            "log_source": self.log_source.value if self.log_source else None,
         }
 
         # In TRAINING mode, provide general difficulty hints
-        # In EVAL mode, provide NO hints about the anomaly
         if self.mode == EnvironmentMode.TRAINING:
             metadata["difficulty_hint"] = self._get_severity_hint()
-            # No component or type hints - agent must discover these
-        # In EVAL mode: metadata contains no hints about the anomaly
 
-        return InvestigationObservation(
-            command_output="",
-            command_history=[],
+        return LogObservation(
+            command_output="Environment ready. Use bash commands to investigate log.txt",
+            stderr="",
+            exit_code=0,
             steps_remaining=self.MAX_STEPS,
             total_steps=self.MAX_STEPS,
             answer_submitted=False,
-            task_difficulty=self.difficulty,
-            episode_reward=0.0,
-            mode=self.mode,
-            data_source=self.data_source,
-            log_source=self.log_source,
+            task_difficulty=self.difficulty.value,
+            done=False,
+            reward=0.0,
             metadata=metadata,
         )
 
     def _get_severity_hint(self) -> str:
         """Get a hint about the anomaly severity."""
-        anomaly_type = self.ground_truth.get("anomaly_type")
         intensity = self.ground_truth.get("intensity", 0.5)
-
         if intensity >= 0.7:
             return "obvious"
         elif intensity >= 0.4:
@@ -198,74 +216,92 @@ class InvestigationEpisode:
         else:
             return "subtle"
 
-    def step(self, action: InvestigationAction) -> InvestigationObservation:
+    def step(self, action: LogAction) -> LogObservation:
         """
         Execute an action in the episode.
 
         Args:
-            action: The action to execute
+            action: The action to execute (LogAction format)
 
         Returns:
             Observation after the step
         """
         if self.answer_submitted:
-            return InvestigationObservation(
+            return LogObservation(
                 command_output="Episode already complete. Please reset.",
-                command_history=self.command_history,
+                stderr="",
+                exit_code=1,
                 steps_remaining=0,
                 total_steps=self.MAX_STEPS,
                 answer_submitted=True,
-                task_difficulty=self.difficulty,
-                episode_reward=self.episode_reward,
+                task_difficulty=self.difficulty.value,
+                done=True,
+                reward=self.episode_reward,
                 metadata={"status": "episode_complete"},
             )
 
         self.step_count += 1
 
         if action.action_type == "submit":
-            return self._handle_submit(action.answer)
+            return self._handle_submit(action)
         elif action.action_type == "bash":
-            return self._handle_bash(action.bash_command.command if action.bash_command else "")
+            return self._handle_bash(action.command or "")
         else:
-            return InvestigationObservation(
+            return LogObservation(
                 command_output=f"Unknown action type: {action.action_type}",
-                command_history=self.command_history,
+                stderr="Use action_type='bash' or 'submit'",
+                exit_code=1,
                 steps_remaining=self.MAX_STEPS - self.step_count,
                 total_steps=self.MAX_STEPS,
                 answer_submitted=False,
-                task_difficulty=self.difficulty,
-                episode_reward=self.episode_reward,
-                mode=self.mode,
-                data_source=self.data_source,
-                log_source=self.log_source,
+                task_difficulty=self.difficulty.value,
+                done=False,
+                reward=self.episode_reward,
                 metadata={"error": "invalid_action_type"},
             )
 
-    def _handle_submit(self, answer: Optional[SubmitAnswer]) -> InvestigationObservation:
-        """
-        Handle answer submission.
-
-        Feedback is mode-dependent:
-        - TRAINING: Full feedback with component scores, type accuracy, window IoU, efficiency, AND ground truth.
-        - EVAL: Scores only (no ground truth revealed to prevent learning during evaluation).
-        """
-        if answer is None:
-            return InvestigationObservation(
-                command_output="No answer provided for submission.",
-                command_history=self.command_history,
+    def _handle_submit(self, action: LogAction) -> LogObservation:
+        """Handle answer submission."""
+        if not action.anomaly_type or not action.component:
+            return LogObservation(
+                command_output="Submit action requires: anomaly_type, component, start_time, end_time",
+                stderr="Missing required fields",
+                exit_code=1,
                 steps_remaining=self.MAX_STEPS - self.step_count,
                 total_steps=self.MAX_STEPS,
                 answer_submitted=False,
-                task_difficulty=self.difficulty,
-                episode_reward=self.episode_reward,
-                mode=self.mode,
-                data_source=self.data_source,
-                log_source=self.log_source,
-                metadata={"error": "no_answer"},
+                task_difficulty=self.difficulty.value,
+                done=False,
+                reward=self.episode_reward,
+                metadata={"error": "missing_fields"},
             )
 
         self.answer_submitted = True
-        self.predicted_answer = answer
+
+        # Create SubmitAnswer for grading
+        try:
+            answer = SubmitAnswer(
+                anomaly_type=AnomalyType(action.anomaly_type),
+                component=action.component,
+                start_time=action.start_time or "",
+                end_time=action.end_time or "",
+                confidence=action.confidence,
+            )
+            self.predicted_answer = answer
+        except ValueError:
+            # Invalid anomaly type
+            return LogObservation(
+                command_output=f"Invalid anomaly_type: {action.anomaly_type}",
+                stderr=f"Valid types: {[t.value for t in AnomalyType]}",
+                exit_code=1,
+                steps_remaining=0,
+                total_steps=self.MAX_STEPS,
+                answer_submitted=True,
+                task_difficulty=self.difficulty.value,
+                done=True,
+                reward=0.0,
+                metadata={"error": "invalid_anomaly_type"},
+            )
 
         # Calculate final reward
         result = self.grader.grade(
@@ -278,7 +314,6 @@ class InvestigationEpisode:
 
         # Format feedback based on mode
         if self.mode == EnvironmentMode.TRAINING:
-            # Full feedback including ground truth for training
             feedback = self._format_answer_feedback(result, show_ground_truth=True)
             metadata = {
                 "episode_complete": True,
@@ -296,7 +331,6 @@ class InvestigationEpisode:
                 },
             }
         else:
-            # EVAL mode: scores only, no ground truth
             feedback = self._format_answer_feedback(result, show_ground_truth=False)
             metadata = {
                 "episode_complete": True,
@@ -309,21 +343,20 @@ class InvestigationEpisode:
                 "note": "Ground truth withheld in EVAL mode",
             }
 
-        return InvestigationObservation(
+        return LogObservation(
             command_output=feedback,
-            command_history=self.command_history,
+            stderr="",
+            exit_code=0,
             steps_remaining=0,
             total_steps=self.MAX_STEPS,
             answer_submitted=True,
-            task_difficulty=self.difficulty,
-            episode_reward=self.episode_reward,
-            mode=self.mode,
-            data_source=self.data_source,
-            log_source=self.log_source,
+            task_difficulty=self.difficulty.value,
+            done=True,
+            reward=self.episode_reward,
             metadata=metadata,
         )
 
-    def _handle_bash(self, command: str) -> InvestigationObservation:
+    def _handle_bash(self, command: str) -> LogObservation:
         """Execute a bash command in the sandbox."""
         # Validate command
         is_valid, error_msg = self._validate_command(command)
@@ -332,76 +365,67 @@ class InvestigationEpisode:
                 {
                     "command": command,
                     "output": f"Command not allowed: {error_msg}",
-                    "error": error_msg,  # Store error message as string
+                    "error": error_msg,
                 }
             )
-            return InvestigationObservation(
+            return LogObservation(
                 command_output=f"Error: {error_msg}",
-                command_history=self.command_history,
+                stderr=error_msg,
+                exit_code=1,
                 steps_remaining=self.MAX_STEPS - self.step_count,
                 total_steps=self.MAX_STEPS,
                 answer_submitted=False,
-                task_difficulty=self.difficulty,
-                episode_reward=self.episode_reward,
-                mode=self.mode,
-                data_source=self.data_source,
-                log_source=self.log_source,
-                metadata={"error": error_msg},
+                task_difficulty=self.difficulty.value,
+                done=False,
+                reward=self.episode_reward,
+                metadata={"error": error_msg, "command": command},
             )
 
         # Execute command
-        output, error = self._execute_command(command)
+        stdout, stderr = self._execute_command(command)
 
         self.command_history.append(
             {
                 "command": command,
-                "output": output,
-                "error": error,
+                "output": stdout,
+                "error": stderr,
             }
         )
 
-        # Cap internal storage to last 5 entries to prevent memory bloat
-        if len(self.command_history) > 5:
-            self.command_history = self.command_history[-5:]
+        # Cap history to prevent memory bloat
+        if len(self.command_history) > 10:
+            self.command_history = self.command_history[-10:]
 
-        # Compute intermediate reward signal
-        intermediate_reward = self._compute_intermediate_reward(output, error)
+        # Compute intermediate reward
+        intermediate_reward = self._compute_intermediate_reward(stdout, stderr)
         self.episode_reward += intermediate_reward
 
-        return InvestigationObservation(
-            command_output=output,
-            command_history=self.command_history[-3:],  # Return only last 3 in observations
+        return LogObservation(
+            command_output=stdout,
+            stderr=stderr,
+            exit_code=0 if not stderr else 1,
             steps_remaining=self.MAX_STEPS - self.step_count,
             total_steps=self.MAX_STEPS,
             answer_submitted=False,
-            task_difficulty=self.difficulty,
-            episode_reward=self.episode_reward,
-            mode=self.mode,
-            data_source=self.data_source,
-            log_source=self.log_source,
+            task_difficulty=self.difficulty.value,
+            done=False,
+            reward=self.episode_reward,
             metadata={
-                "last_command": command,
-                "output_truncated": len(output) >= self.OUTPUT_TRUNCATION,
+                "command": command,
+                "output_truncated": len(stdout) >= self.OUTPUT_TRUNCATION,
+                "intermediate_reward": intermediate_reward,
             },
         )
 
     def _validate_command(self, command: str) -> Tuple[bool, str]:
-        """
-        Validate a bash command for security.
-
-        Args:
-            command: Command to validate
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
+        """Validate a bash command for security."""
         if not command or not command.strip():
             return False, "Empty command"
 
         # Check for forbidden patterns
         for pattern in self.FORBIDDEN_PATTERNS:
             if re.search(pattern, command):
-                return False, f"Forbidden pattern detected: {pattern}"
+                return False, f"Forbidden pattern detected"
 
         # Extract the base command
         parts = command.strip().split()
@@ -412,34 +436,27 @@ class InvestigationEpisode:
 
         # Check if base command is allowed
         if base_cmd not in self.ALLOWED_COMMANDS:
-            return False, f"Command not allowed: {base_cmd}"
+            return (
+                False,
+                f"Command not allowed: {base_cmd}. Use: {', '.join(self.ALLOWED_COMMANDS[:5])}...",
+            )
 
         # If command contains pipes, validate each piped command
         if "|" in command:
             pipe_cmds = [p.strip().split()[0] for p in command.split("|") if p.strip()]
             for pc in pipe_cmds:
                 if pc not in self.ALLOWED_COMMANDS:
-                    return False, f"Command not allowed: {pc}"
+                    return False, f"Piped command not allowed: {pc}"
 
         return True, ""
 
     def _execute_command(self, command: str) -> Tuple[str, str]:
-        """
-        Execute a bash command in the sandbox.
-
-        Args:
-            command: Command to execute
-
-        Returns:
-            Tuple of (stdout, stderr)
-        """
+        """Execute a bash command in the sandbox."""
         try:
-            # Set up environment
             env = os.environ.copy()
             env["PATH"] = "/usr/bin:/bin:/usr/local/bin"
             env["HOME"] = self.sandbox_dir
 
-            # Execute with timeout
             result = subprocess.run(
                 command,
                 shell=True,
@@ -468,18 +485,7 @@ class InvestigationEpisode:
             return "", f"Execution error: {str(e)}"
 
     def _compute_intermediate_reward(self, stdout: str, stderr: str) -> float:
-        """
-        Compute small intermediate reward based on command output.
-
-        Rewards agents for finding relevant signals without revealing ground truth.
-
-        Args:
-            stdout: Command stdout
-            stderr: Command stderr
-
-        Returns:
-            Small reward delta (typically -0.05 to +0.05)
-        """
+        """Compute small intermediate reward based on command output."""
         if not stdout or stderr:
             return 0.0
 
@@ -490,13 +496,10 @@ class InvestigationEpisode:
         if gt.get("component") and gt["component"].lower() in stdout.lower():
             reward += 0.02
 
-        # Small positive if output contains timestamps in the anomaly window
+        # Check for timestamps in anomaly window
         try:
             gt_start = self.grader._parse_timestamp(str(gt.get("start_time", "")))
             gt_end = self.grader._parse_timestamp(str(gt.get("end_time", "")))
-
-            # Check if any timestamps in output fall within window
-            import re
 
             timestamp_pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
             for match in re.finditer(timestamp_pattern, stdout):
@@ -504,44 +507,32 @@ class InvestigationEpisode:
                     ts = self.grader._parse_timestamp(match.group(0))
                     if gt_start <= ts <= gt_end:
                         reward += 0.02
-                        break  # Only reward once per command
+                        break
                 except:
                     pass
         except:
             pass
 
-        # Small negative for repeating the same command pattern
+        # Penalize repetitive commands
         if len(self.command_history) >= 3:
             last_three = [h["command"] for h in self.command_history[-3:]]
-            # Check if all three are essentially the same (ignoring minor variations)
-            if (
-                len(set(cmd.split()[0] for cmd in last_three if cmd.strip())) == 1
-            ):  # Same base command
+            if len(set(cmd.split()[0] for cmd in last_three if cmd.strip())) == 1:
                 reward -= 0.01
 
-        return max(-0.05, min(0.05, reward))  # Cap between -0.05 and +0.05
+        return max(-0.05, min(0.05, reward))
 
     def _format_answer_feedback(self, result: EpisodeResult, show_ground_truth: bool = True) -> str:
-        """
-        Format feedback for submitted answer.
-
-        Args:
-            result: Episode result from grading
-            show_ground_truth: Whether to include ground truth in feedback
-
-        Returns:
-            Formatted feedback string
-        """
+        """Format feedback for submitted answer."""
         lines = [
             "=" * 50,
             "ANSWER SUBMITTED",
             "=" * 50,
             f"Total Score: {result.reward:.4f}",
             "-" * 50,
-            "Component Identification: {:.4f}".format(result.component_score),
-            "Type Classification: {:.4f}".format(result.type_score),
-            "Window Precision: {:.4f}".format(result.window_score),
-            "Investigation Efficiency: {:.4f}".format(result.efficiency_score),
+            f"Component Identification: {result.component_score:.4f}",
+            f"Type Classification: {result.type_score:.4f}",
+            f"Window Precision: {result.window_score:.4f}",
+            f"Investigation Efficiency: {result.efficiency_score:.4f}",
         ]
 
         if show_ground_truth:
@@ -568,34 +559,28 @@ class InvestigationEpisode:
         )
 
 
-class LogAnomalyEnvironment:
+class LogAnomalyEnvironment(Environment):
     """
     Main environment class for log anomaly investigation.
 
-    This environment simulates a sandboxed terminal where an agent can
-    investigate log files using read-only bash commands to identify
-    and characterize anomalies.
+    This environment inherits from OpenEnv Environment base class and
+    implements the standard step()/reset()/state interface.
 
     Supports two operating modes:
     - TRAINING: Full feedback including ground truth for RL training
     - EVAL: Limited feedback for fair agent evaluation
-
-    Supports two data sources:
-    - SYNTHETIC: Generated logs with injected anomalies
-    - LOGHUB: Real logs from LogHub datasets
     """
 
     def __init__(self):
         """Initialize the environment."""
         self.episode: Optional[InvestigationEpisode] = None
-        self.state = InvestigationState(
+        self._state = LogState(
             episode_id="",
             step_count=0,
             log_file_path=None,
-            ground_truth=None,
             task_id=None,
-            mode=EnvironmentMode.EVAL,
-            data_source=DataSource.SYNTHETIC,
+            mode="eval",
+            data_source="synthetic",
             log_source=None,
         )
         self._temp_dir: Optional[str] = None
@@ -607,64 +592,55 @@ class LogAnomalyEnvironment:
         self.task_generator = TaskGenerator(self.grader)
         self.loghub_sampler = LogHubSampler()
 
-        # LogHub data cache (lazy loaded)
-        self._loghub_data: Dict[LogSource, Tuple[List[LogLine], Any]] = {}
-
         # Episode storage with size limit
         self.episodes: Dict[str, InvestigationEpisode] = {}
-        self.MAX_EPISODES = 100  # Prevent unbounded growth
+        self.MAX_EPISODES = 100
 
     def reset(
         self,
         seed: Optional[int] = None,
-        difficulty: str = "easy",
         episode_id: Optional[str] = None,
-        task_id: Optional[str] = None,
-        mode: str = "eval",
-        data_source: str = "synthetic",
-        log_source: Optional[str] = None,
         **kwargs: Any,
-    ) -> InvestigationObservation:
+    ) -> LogObservation:
         """
         Reset the environment and start a new episode.
 
         Args:
             seed: Random seed
-            difficulty: Difficulty level ("easy", "medium", "hard")
             episode_id: Optional episode ID
-            task_id: Optional specific task ID
-            mode: Operating mode ("training" or "eval")
-            data_source: Data source ("synthetic" or "loghub")
-            log_source: Specific LogHub source (HDFS, BGL, OpenStack, Apache)
-            **kwargs: Additional options
+            **kwargs: Additional options (difficulty, mode, data_source, etc.)
 
         Returns:
-            Initial observation with mode-appropriate information
+            Initial observation
         """
         import random
 
         if seed is not None:
             random.seed(seed)
 
-        # Parse difficulty
+        # Parse options from kwargs
+        difficulty = kwargs.get("difficulty", "easy")
+        task_id = kwargs.get("task_id")
+        mode = kwargs.get("mode", "eval")
+        data_source = kwargs.get("data_source", "synthetic")
+        log_source = kwargs.get("log_source")
+
+        # Parse enums
         try:
             difficulty_enum = DifficultyLevel(difficulty)
         except ValueError:
             difficulty_enum = DifficultyLevel.EASY
 
-        # Parse mode
         try:
             mode_enum = EnvironmentMode(mode.lower())
         except ValueError:
             mode_enum = EnvironmentMode.EVAL
 
-        # Parse data source
         try:
             data_source_enum = DataSource(data_source.lower())
         except ValueError:
             data_source_enum = DataSource.SYNTHETIC
 
-        # Parse log source (for LogHub data)
         log_source_enum = None
         if log_source:
             try:
@@ -672,7 +648,7 @@ class LogAnomalyEnvironment:
             except ValueError:
                 pass
 
-        # Generate or load log content
+        # Generate episode
         log_content, ground_truth = self._generate_episode(
             difficulty=difficulty_enum,
             seed=seed,
@@ -684,11 +660,9 @@ class LogAnomalyEnvironment:
         # Create sandbox directory
         self._temp_dir = tempfile.mkdtemp(prefix="log_anomaly_")
         ep_id = episode_id or str(uuid.uuid4())
-
-        # Add episode_id to ground truth
         ground_truth["episode_id"] = ep_id
 
-        # Create episode with mode and data source
+        # Create episode
         self.episode = InvestigationEpisode(
             episode_id=ep_id,
             difficulty=difficulty_enum,
@@ -700,27 +674,23 @@ class LogAnomalyEnvironment:
             log_source=log_source_enum,
         )
 
-        # Update state with mode and data source
-        self.state = InvestigationState(
+        # Update state
+        self._state = LogState(
             episode_id=ep_id,
             step_count=0,
             log_file_path=self.episode.log_filepath,
-            ground_truth=ground_truth,
             task_id=task_id,
-            mode=mode_enum,
-            data_source=data_source_enum,
-            log_source=log_source_enum,
+            mode=mode_enum.value,
+            data_source=data_source_enum.value,
+            log_source=log_source_enum.value if log_source_enum else None,
         )
 
-        # Store episode with size limiting
+        # Store episode
         self.episodes[ep_id] = self.episode
-
-        # Evict oldest episode if we exceed limit
         if len(self.episodes) > self.MAX_EPISODES:
-            oldest_id = min(self.episodes.keys())  # Simple FIFO
+            oldest_id = min(self.episodes.keys())
             self.episodes.pop(oldest_id, None)
 
-        # Return initial observation
         return self.episode.reset()
 
     def _generate_episode(
@@ -731,19 +701,7 @@ class LogAnomalyEnvironment:
         data_source: DataSource = DataSource.SYNTHETIC,
         log_source: Optional[LogSource] = None,
     ) -> Tuple[List[LogLine], Dict[str, Any]]:
-        """
-        Generate a new episode with injected anomaly.
-
-        Args:
-            difficulty: Difficulty level
-            seed: Random seed
-            task_id: Optional task ID
-            data_source: Source of log data (synthetic/loghub)
-            log_source: Specific LogHub source if applicable
-
-        Returns:
-            Tuple of (log content, ground truth)
-        """
+        """Generate a new episode with injected anomaly."""
         import random
 
         if seed is not None:
@@ -753,10 +711,8 @@ class LogAnomalyEnvironment:
             seed = random.randint(0, 1000000)
             self.injector = AnomalyInjector(seed=seed)
 
-        # Get difficulty settings
         config = self.task_generator.get_task_config(difficulty)
 
-        # Generate base synthetic log
         num_lines = {
             DifficultyLevel.EASY: 500,
             DifficultyLevel.MEDIUM: 1000,
@@ -767,7 +723,6 @@ class LogAnomalyEnvironment:
         if data_source == DataSource.LOGHUB and log_source:
             logs, metadata = self._load_loghub_data(log_source, seed, num_lines)
             if logs:
-                # Inject anomaly into real logs
                 anomaly_types = config["allowed_anomaly_types"]
                 anomaly_type = random.choice(anomaly_types)
                 modified_logs, ground_truth = self.injector.inject(
@@ -794,11 +749,9 @@ class LogAnomalyEnvironment:
             seed=seed,
         )
 
-        # Select anomaly type
         anomaly_types = config["allowed_anomaly_types"]
         anomaly_type = random.choice(anomaly_types)
 
-        # Inject anomaly
         modified_logs, ground_truth = self.injector.inject(
             logs=logs,
             anomaly_type=anomaly_type,
@@ -806,7 +759,6 @@ class LogAnomalyEnvironment:
             seed=seed + 1 if seed else None,
         )
 
-        # Add metadata to ground truth
         ground_truth.update(
             {
                 "seed": seed,
@@ -822,18 +774,7 @@ class LogAnomalyEnvironment:
     def _load_loghub_data(
         self, log_source: LogSource, seed: Optional[int], max_lines: int
     ) -> Tuple[Optional[List[LogLine]], Optional[Any]]:
-        """
-        Load LogHub data for the specified source.
-
-        Args:
-            log_source: LogHub source to load
-            seed: Random seed
-            max_lines: Maximum lines to load
-
-        Returns:
-            Tuple of (logs, metadata) or (None, None) if not available
-        """
-        # Check for sample log file
+        """Load LogHub data for the specified source."""
         sample_file = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "data",
@@ -852,15 +793,15 @@ class LogAnomalyEnvironment:
 
     def step(
         self,
-        action: InvestigationAction,
+        action: LogAction,
         timeout_s: Optional[float] = None,
         **kwargs: Any,
-    ) -> InvestigationObservation:
+    ) -> LogObservation:
         """
         Execute an action in the environment.
 
         Args:
-            action: Action to execute
+            action: Action to execute (LogAction)
             timeout_s: Optional timeout (unused)
             **kwargs: Additional arguments
 
@@ -870,34 +811,26 @@ class LogAnomalyEnvironment:
         if self.episode is None:
             raise RuntimeError("Environment not reset. Call reset() first.")
 
+        # Handle legacy InvestigationAction format
+        if isinstance(action, InvestigationAction):
+            action = action.to_log_action()
+
         # Execute step
         observation = self.episode.step(action)
 
         # Update state
-        self.state.step_count = self.episode.step_count
+        self._state.step_count = self.episode.step_count
+        self._state.last_exit_code = observation.exit_code
 
         return observation
 
     @property
-    def state(self) -> InvestigationState:
+    def state(self) -> LogState:
         """Get current environment state."""
         return self._state
 
-    @state.setter
-    def state(self, value: InvestigationState) -> None:
-        """Set current state."""
-        self._state = value
-
     def get_result(self, episode_id: Optional[str] = None) -> EpisodeResult:
-        """
-        Get the result for an episode.
-
-        Args:
-            episode_id: Episode ID (uses current if not provided)
-
-        Returns:
-            Episode result with scores
-        """
+        """Get the result for an episode."""
         if episode_id:
             episode = self.episodes.get(episode_id)
         else:
@@ -909,24 +842,11 @@ class LogAnomalyEnvironment:
         return episode.get_result()
 
     def list_tasks(self) -> Dict[str, Any]:
-        """
-        List all available tasks.
-
-        Returns:
-            Task definitions
-        """
+        """List all available tasks."""
         return self.task_generator.list_tasks()
 
     def grade(self, episode_id: str) -> EpisodeResult:
-        """
-        Grade an episode.
-
-        Args:
-            episode_id: Episode to grade
-
-        Returns:
-            Episode result
-        """
+        """Grade an episode."""
         return self.get_result(episode_id)
 
     def close(self) -> None:
