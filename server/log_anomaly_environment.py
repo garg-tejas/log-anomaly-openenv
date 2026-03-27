@@ -26,23 +26,8 @@ if _parent_dir not in sys.path:
     sys.path.insert(0, _parent_dir)
 
 # Import OpenEnv base classes
-try:
-    from openenv.core.env_server.interfaces import Environment
-    from openenv.core.env_server.types import Observation as BaseObservation
-except ImportError:
-    # Fallback for standalone development
-    class Environment:
-        """Base environment class (fallback)."""
-
-        def reset(self, **kwargs) -> Any:
-            raise NotImplementedError
-
-        def step(self, action: Any, **kwargs) -> Any:
-            raise NotImplementedError
-
-        @property
-        def state(self) -> Any:
-            raise NotImplementedError
+from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import Observation as BaseObservation
 
 
 from log_utils import (

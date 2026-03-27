@@ -11,36 +11,10 @@ from typing import Optional, List, Dict, Any
 from pydantic import Field
 from enum import Enum
 
-# Import OpenEnv base classes with proper aliasing to avoid conflicts
-try:
-    from openenv.core.env_server.interfaces import Action as OpenEnvAction
-    from openenv.core.env_server.interfaces import Observation as OpenEnvObservation
-    from openenv.core.env_server.interfaces import State as OpenEnvState
-
-    _BaseAction = OpenEnvAction
-    _BaseObservation = OpenEnvObservation
-    _BaseState = OpenEnvState
-except ImportError:
-    # Fallback for standalone development
-    from pydantic import BaseModel as _BaseModel
-
-    class _BaseAction(_BaseModel):
-        """Base action class (fallback)."""
-
-        metadata: Dict[str, Any] = Field(default_factory=dict)
-
-    class _BaseObservation(_BaseModel):
-        """Base observation class (fallback)."""
-
-        done: bool = False
-        reward: Optional[float] = None
-        metadata: Dict[str, Any] = Field(default_factory=dict)
-
-    class _BaseState(_BaseModel):
-        """Base state class (fallback)."""
-
-        episode_id: Optional[str] = None
-        step_count: int = 0
+# Import OpenEnv base classes
+from openenv.core.env_server.interfaces import Action as _BaseAction
+from openenv.core.env_server.interfaces import Observation as _BaseObservation
+from openenv.core.env_server.interfaces import State as _BaseState
 
 
 class AnomalyType(str, Enum):
