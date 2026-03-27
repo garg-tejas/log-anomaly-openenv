@@ -324,9 +324,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Setup
+    # Setup - ReactAgent reads API key from environment, not constructor
     base_url = args.base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
-    api_key = os.getenv("OPENAI_API_KEY", "dummy")
+
+    # Ensure OPENAI_API_KEY is set in environment if not already
+    if "OPENAI_API_KEY" not in os.environ:
+        os.environ["OPENAI_API_KEY"] = "dummy"
 
     print(f"🔍 Debug Model Responses")
     print(f"Model: {args.model}")
@@ -335,8 +338,8 @@ def main() -> None:
     print(f"API Base URL: {base_url}")
     print(f"Output: {args.output}\n")
 
-    # Create debug agent
-    agent = DebugReactAgent(base_url=base_url, api_key=api_key, model=args.model)
+    # Create debug agent (api_key read from environment by ReactAgent.__post_init__)
+    agent = DebugReactAgent(base_url=base_url, model=args.model)
 
     # Import environment (direct environment, not client)
     from server.log_anomaly_environment import LogAnomalyEnvironment
