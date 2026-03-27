@@ -7,3 +7,4 @@ data/
 vllm_server.log
 baseline_*.json
 outputs/
+FUTURE.md
