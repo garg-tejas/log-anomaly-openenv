@@ -128,18 +128,18 @@ ANOMALY TYPES: error_spike, memory_leak, latency_degradation, cascade_failure, s
 
 To run a command, reply with ONLY a bash code block:
 ```bash
-grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+grep ERROR log.txt | head -10
 ```
 
 To submit your answer, reply with ONLY a json code block:
 ```json
-{"anomaly_type": "error_spike", "component": "service_a", "start_time": "2024-01-15T10:30:00", "end_time": "2024-01-15T10:35:00"}
+{"anomaly_type": "TYPE_HERE", "component": "SERVICE_HERE", "start_time": "TIMESTAMP_FROM_LOGS", "end_time": "TIMESTAMP_FROM_LOGS"}
 ```
 
 RULES:
 1. Output exactly ONE code block per response
 2. No text before or after the code block
-3. Use real timestamps from the logs, never placeholders
+3. start_time and end_time MUST be real timestamps copied from grep output (format: 2026-03-27T14:55:00)
 4. Investigate at least 3 commands before submitting"""
 
     def _build_thinking_prompt(
@@ -192,9 +192,13 @@ RULES:
         if "</think>" in thought:
             thought = thought.split("</think>")[-1].strip()
 
+        # Normalize line endings and whitespace
+        thought = thought.replace("\r\n", "\n").replace("\r", "\n")
+
         # === STEP 1: Look for fenced code blocks ===
         # Match ```bash, ```json, or plain ``` code blocks
-        code_block_pattern = r"```(\w*)\n(.*?)```"
+        # More flexible: optional whitespace after language, handles edge cases
+        code_block_pattern = r"```(\w*)\s*\n(.*?)```"
         matches = re.findall(code_block_pattern, thought, re.DOTALL | re.IGNORECASE)
 
         for lang, content in matches:
