@@ -132,40 +132,33 @@ COMPONENTS: service_a, service_b, service_c, service_d (extract from 3rd field)
 
 ANOMALY TYPES (you must identify exactly one):
 1. error_spike - Sudden burst of ERROR logs from ONE component
-   Pattern: Many ERROR lines from same component in short time window
-   
-2. memory_leak - Gradually increasing memory/heap values
-   Pattern: Look for "heap", "GC", "memory", "MB" with increasing numbers
-   
-3. latency_degradation - Increasing response times over time
-   Pattern: Look for "latency", "timeout", "ms" with high/increasing values
-   
-4. cascade_failure - Multiple components failing in sequence (HARD)
-   Pattern: Component A fails, then B fails mentioning A, then C fails mentioning B
-   Keywords: "cascaded failure", "dependency failure", "affected by", "waiting for", "circuit breaker"
-   
+2. memory_leak - Look for "heap", "GC", "memory", "MB" with increasing numbers
+3. latency_degradation - Look for "latency", "timeout", "ms" with high values
+4. cascade_failure - Keywords: "cascaded failure", "dependency failure", "affected by"
 5. service_dropout - A component stops producing logs entirely
-   Pattern: Gap in logs from one component while others continue
 
 AVAILABLE COMMANDS: grep, awk, sed, sort, uniq, wc, head, tail, cut, cat
 
-INVESTIGATION STRATEGY:
-1. Count errors by component: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
-2. Check for cascade patterns: grep -iE 'cascade|dependency|affected' log.txt | head -15
-3. Check for latency/memory: grep -iE 'latency|memory|heap|timeout' log.txt | head -15
-4. GET TIMESTAMPS: grep ERROR log.txt | head -5 && grep ERROR log.txt | tail -5
-5. Submit with the timestamps from ERROR lines
+OUTPUT FORMAT - You MUST reply with EXACTLY ONE of these two formats:
 
-SUBMIT FORMAT (use exact JSON):
+For bash commands:
+Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+
+For final submission:
 Submit: {"anomaly_type": "error_spike", "component": "service_a", "start_time": "2026-03-26T17:30:00", "end_time": "2026-03-26T17:45:00"}
 
-CRITICAL RULES:
+INVESTIGATION STEPS:
+1. Command: grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn
+2. Command: grep -iE 'cascade|dependency|affected|latency|memory|heap' log.txt | head -15
+3. Command: grep ERROR log.txt | head -5 && grep ERROR log.txt | tail -5
+4. Submit with your findings
+
+RULES:
+- Always prefix commands with "Command: "
+- Always prefix submissions with "Submit: "
 - component must be exact: service_a, service_b, service_c, or service_d
-- start_time = first ERROR timestamp, end_time = last ERROR timestamp in the anomaly
-- If you see "cascaded failure" or "dependency failure" → anomaly_type is "cascade_failure"
-- If you see "heap" or "memory" with MB values → anomaly_type is "memory_leak"
-- If you see "latency" with ms values → anomaly_type is "latency_degradation"
-- Default to "error_spike" if just ERROR logs without special patterns"""
+- start_time/end_time from ERROR log timestamps
+- NO explanations after the Command/Submit line"""
 
     def _build_thinking_prompt(
         self,
@@ -204,12 +197,9 @@ CRITICAL RULES:
         prompt_parts.extend(
             [
                 "",
-                "What is your next action? Reply with ONE of:",
-                "Command: <bash command>",
-                "OR",
-                'Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "YYYY-MM-DDTHH:MM:SS", "end_time": "YYYY-MM-DDTHH:MM:SS"}',
-                "",
-                "NO markdown, NO explanation, just the command or submit line.",
+                "Reply with EXACTLY one line in one of these formats:",
+                "Command: <your bash command here>",
+                'Submit: {"anomaly_type": "...", "component": "service_X", "start_time": "...", "end_time": "..."}',
             ]
         )
 
@@ -221,6 +211,12 @@ CRITICAL RULES:
         """
         Parse the agent's thought into an action.
 
+        Handles multiple output formats:
+        1. Standard "Command: <cmd>" or "Submit: <json>" format
+        2. Qwen thinking mode with </think> tag followed by bare command
+        3. Fenced code blocks with bash commands
+        4. Direct JSON submissions
+
         Args:
             thought: The agent's reasoning text
             observation: Current observation (for fallback command selection)
@@ -231,9 +227,70 @@ CRITICAL RULES:
         # Clean up common artifacts
         thought = thought.replace("```json", "").replace("```", "").strip()
 
-        # Check if submitting
+        # Common bash commands to recognize (for bare command detection)
+        BASH_COMMANDS = (
+            "grep",
+            "awk",
+            "sed",
+            "cat",
+            "head",
+            "tail",
+            "wc",
+            "cut",
+            "sort",
+            "uniq",
+            "find",
+            "ls",
+            "echo",
+            "less",
+            "more",
+        )
+
+        # === STEP 1: Handle Qwen thinking mode ===
+        # Extract content after </think> tag - this is the actual response
+        if "</think>" in thought:
+            # Get everything after the last </think> tag
+            post_think = thought.split("</think>")[-1].strip()
+            if post_think:
+                # Check for Submit in post-think content
+                if "submit" in post_think.lower() or '"anomaly_type"' in post_think:
+                    answer_data = self._extract_submit_json(post_think)
+                    if answer_data:
+                        try:
+                            return InvestigationAction(
+                                action_type="submit",
+                                answer=SubmitAnswer(
+                                    anomaly_type=AnomalyType(
+                                        answer_data.get("anomaly_type", "error_spike")
+                                    ),
+                                    component=answer_data.get("component", "unknown"),
+                                    start_time=answer_data.get("start_time", ""),
+                                    end_time=answer_data.get("end_time", ""),
+                                ),
+                            )
+                        except (ValueError, KeyError):
+                            pass
+
+                # Check for "Command:" prefix in post-think
+                cmd_match = re.search(r"(?:Command|command):\s*([^\n]+)", post_think)
+                if cmd_match:
+                    command = cmd_match.group(1).strip().strip("`*").strip()
+                    if command and command not in {"*", "**", "***"}:
+                        return InvestigationAction(
+                            action_type="bash",
+                            bash_command=BashCommand(command=command),
+                        )
+
+                # Check for bare bash command (no prefix) after </think>
+                first_line = post_think.split("\n")[0].strip()
+                if first_line and first_line.split()[0] in BASH_COMMANDS:
+                    return InvestigationAction(
+                        action_type="bash",
+                        bash_command=BashCommand(command=first_line),
+                    )
+
+        # === STEP 2: Check for Submit (whole response) ===
         if "submit" in thought.lower() or '"anomaly_type"' in thought:
-            # Try multiple JSON extraction patterns
             answer_data = self._extract_submit_json(thought)
             if answer_data:
                 try:
@@ -251,7 +308,7 @@ CRITICAL RULES:
                 except (ValueError, KeyError):
                     pass
 
-        # Extract bash command
+        # === STEP 3: Extract "Command:" prefixed bash command ===
         command_match = re.search(r"(?:Command|command):\s*([^\n]+)", thought)
         if command_match:
             command = command_match.group(1).strip()
@@ -263,7 +320,7 @@ CRITICAL RULES:
                     bash_command=BashCommand(command=command),
                 )
 
-        # Try to extract from fenced code blocks
+        # === STEP 4: Extract from fenced code blocks ===
         code_block_match = re.search(r"```(?:bash)?\n([^`\n]+)", thought, re.IGNORECASE)
         if code_block_match:
             command = code_block_match.group(1).strip().strip("`*").strip()
@@ -272,6 +329,18 @@ CRITICAL RULES:
                     action_type="bash",
                     bash_command=BashCommand(command=command),
                 )
+
+        # === STEP 5: Try bare command detection (last resort before fallback) ===
+        # Look for lines that start with common bash commands
+        for line in thought.split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                first_word = line.split()[0] if line.split() else ""
+                if first_word in BASH_COMMANDS:
+                    return InvestigationAction(
+                        action_type="bash",
+                        bash_command=BashCommand(command=line),
+                    )
 
         # Check for command deduplication - avoid repeating recent commands
         recent_commands = [
