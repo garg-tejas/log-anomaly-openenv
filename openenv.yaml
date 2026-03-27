@@ -1,4 +1,4 @@
-# OpenEnv Configuration
+# OpenEnv Configuration - Log Anomaly Investigation Environment
 spec_version: 1
 name: log_anomaly_env
 type: space
@@ -6,22 +6,14 @@ runtime: fastapi
 app: server.app:app
 port: 8000
 
-# Metadata
+# HuggingFace Space metadata (used in README.md frontmatter)
+# These are duplicated here for openenv CLI compatibility
 title: Log Anomaly Investigation Environment
-description: |
-  A real-world OpenEnv environment for training AI agents to investigate log anomalies
-  using bash command exploration. Agents must identify anomaly types, affected components,
-  and time windows through iterative investigation.
 emoji: "🔍"
 colorFrom: purple
 colorTo: blue
 sdk: docker
 pinned: false
-
-# Author information
-author:
-  name: OpenEnv Contributors
-  email: openenv@example.com
 
 # Tags for discovery
 tags:
@@ -29,176 +21,22 @@ tags:
   - log-analysis
   - anomaly-detection
   - reinforcement-learning
-  - agent-training
   - devops
   - sre
-  - observability
-  - incident-response
 
-# Task definitions
+# Task definitions (3 difficulty levels as required)
 tasks:
   easy:
     difficulty: easy
     description: "Find and identify obvious error spikes in system logs."
-    anomaly_types:
-      - error_spike
     expected_score_range: [0.6, 1.0]
 
   medium:
     difficulty: medium
-    description: "Investigate logs to identify anomalies of various types."
-    anomaly_types:
-      - error_spike
-      - memory_leak
-      - service_dropout
-      - latency_degradation
+    description: "Investigate logs to identify various anomaly types."
     expected_score_range: [0.4, 0.8]
 
   hard:
     difficulty: hard
     description: "Investigate cascade failures requiring multi-hop temporal reasoning."
-    anomaly_types:
-      - cascade_failure
     expected_score_range: [0.3, 0.7]
-
-# Action space definition
-action_space:
-  type: union
-  variants:
-    - name: bash
-      fields:
-        - name: action_type
-          type: literal
-          value: "bash"
-        - name: bash_command
-          type: object
-          fields:
-            - name: command
-              type: string
-              description: "Bash command to execute"
-
-    - name: submit
-      fields:
-        - name: action_type
-          type: literal
-          value: "submit"
-        - name: answer
-          type: object
-          fields:
-            - name: anomaly_type
-              type: enum
-              values:
-                [
-                  error_spike,
-                  memory_leak,
-                  service_dropout,
-                  cascade_failure,
-                  latency_degradation,
-                  auth_anomaly,
-                ]
-            - name: component
-              type: string
-              description: "Affected component name"
-            - name: start_time
-              type: string
-              format: iso8601
-              description: "Anomaly start timestamp"
-            - name: end_time
-              type: string
-              format: iso8601
-              description: "Anomaly end timestamp"
-
-# Observation space definition
-observation_space:
-  type: object
-  fields:
-    - name: command_output
-      type: string
-      description: "Output from the last bash command"
-    - name: command_history
-      type: array
-      items:
-        type: object
-        fields:
-          - name: command
-            type: string
-          - name: output
-            type: string
-          - name: error
-            type: boolean
-    - name: steps_remaining
-      type: integer
-      description: "Number of steps remaining"
-    - name: total_steps
-      type: integer
-      description: "Total steps allowed (15)"
-    - name: answer_submitted
-      type: boolean
-    - name: task_difficulty
-      type: enum
-      values: [easy, medium, hard]
-    - name: episode_reward
-      type: number
-      description: "Cumulative reward so far"
-    - name: mode
-      type: enum
-      values: [training, eval]
-      description: "Environment operating mode"
-    - name: data_source
-      type: enum
-      values: [synthetic, loghub]
-      description: "Source of log data"
-    - name: log_source
-      type: enum
-      values: [HDFS, BGL, OpenStack, Apache]
-      description: "Specific LogHub source if applicable"
-
-# Grading configuration
-grading:
-  components:
-    - name: component
-      weight: 0.25
-      description: "Component identification accuracy"
-    - name: type
-      weight: 0.25
-      description: "Anomaly type classification accuracy"
-    - name: window
-      weight: 0.35
-      description: "Time window precision (IoU)"
-    - name: efficiency
-      weight: 0.15
-      description: "Investigation efficiency (fewer steps = higher score)"
-  score_range: [0.0, 1.0]
-
-# Resource requirements
-resources:
-  cpu: "1"
-  memory: "2Gi"
-  gpu: false
-
-# Endpoints
-endpoints:
-  - path: /health
-    method: GET
-    description: Health check endpoint
-  - path: /reset
-    method: POST
-    description: Reset environment and start new episode
-  - path: /step
-    method: POST
-    description: Execute action in environment
-  - path: /state
-    method: GET
-    description: Get current environment state
-  - path: /tasks
-    method: GET
-    description: List available tasks
-  - path: /grade/{episode_id}
-    method: GET
-    description: Get grading results for episode
-  - path: /baseline
-    method: POST
-    description: Run baseline inference
-  - path: /grader
-    method: POST
-    description: Grade the most recent episode

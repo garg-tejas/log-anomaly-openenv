@@ -4,3 +4,6 @@ __pycache__/
 data/
 *.env
 !env.example
+vllm_server.log
+baseline_*.json
+outputs/
