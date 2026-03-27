@@ -45,6 +45,7 @@ except ImportError:
 
 class AnomalyType(str, Enum):
     """Types of anomalies that can be injected into logs."""
+
     ERROR_SPIKE = "error_spike"
     MEMORY_LEAK = "memory_leak"
     SERVICE_DROPOUT = "service_dropout"
@@ -70,6 +71,7 @@ class EnvironmentMode(str, Enum):
     - EVAL: Limited feedback without ground truth.
       Used for fair evaluation of agent performance.
     """
+
     TRAINING = "training"
     EVAL = "eval"
 
@@ -152,6 +154,11 @@ class LogObservation(_BaseObservation):
     total_steps: int = Field(default=15, description="Total steps allowed")
     answer_submitted: bool = Field(default=False, description="Whether answer was submitted")
     task_difficulty: str = Field(default="easy", description="Current task difficulty")
+
+    # Explicitly define inherited fields for type checker compatibility
+    done: bool = Field(default=False, description="Whether the episode has terminated")
+    reward: Optional[float] = Field(default=None, description="Reward signal from the last action")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 # =============================================================================
