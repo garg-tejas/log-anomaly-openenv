@@ -101,13 +101,14 @@ class ReactAgent:
             Reasoning about what to do next
         """
         prompt = self._build_thinking_prompt(observation, state)
+        difficulty = observation.task_difficulty.value if observation.task_difficulty else "easy"
 
         response = self.client.chat.completions.create(
             model=self._api_model,
             messages=[
                 {
                     "role": "system",
-                    "content": self._get_system_prompt(),
+                    "content": self._get_system_prompt(difficulty),
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -120,11 +121,25 @@ class ReactAgent:
             return "Error: No response from model"
         return content
 
-    def _get_system_prompt(self) -> str:
+    def _get_system_prompt(self, difficulty: str = "easy") -> str:
         """Get the system prompt for the agent."""
-        return """You are a DevOps engineer investigating log.txt for anomalies.
+        # Different anomaly types are valid for different difficulties
+        if difficulty == "easy":
+            anomaly_hint = (
+                "ANOMALY TYPE: error_spike (this is the ONLY valid type for easy difficulty)"
+            )
+        elif difficulty == "hard":
+            anomaly_hint = (
+                "ANOMALY TYPE: cascade_failure (this is the ONLY valid type for hard difficulty)"
+            )
+        else:  # medium
+            anomaly_hint = (
+                "ANOMALY TYPES: error_spike, memory_leak, latency_degradation, service_dropout"
+            )
 
-ANOMALY TYPES: error_spike, memory_leak, latency_degradation, cascade_failure, service_dropout
+        return f"""You are a DevOps engineer investigating log.txt for anomalies.
+
+{anomaly_hint}
 
 To run a command, reply with ONLY a bash code block:
 ```bash
