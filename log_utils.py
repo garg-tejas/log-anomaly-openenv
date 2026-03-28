@@ -4,6 +4,7 @@ Log Parsing and Anomaly Injection Utilities.
 This module provides log parsing for various log formats and anomaly injection
 capabilities for creating synthetic training data.
 """
+
 import re
 import random
 import hashlib
@@ -25,6 +26,7 @@ else:
 @dataclass
 class ParsedLog:
     """Container for parsed log data."""
+
     lines: List[LogLine]
     start_time: datetime
     end_time: datetime
@@ -127,6 +129,7 @@ class LogParser:
     def _parse_json(self, line: str) -> LogLine:
         """Parse JSON log format."""
         import json
+
         try:
             data = json.loads(line)
             return LogLine(
@@ -136,7 +139,7 @@ class LogParser:
                 message=data.get("message", ""),
                 raw_line=line,
             )
-        except:
+        except (json.JSONDecodeError, KeyError, TypeError):
             return self._parse_generic(line)
 
     def _parse_generic(self, line: str) -> LogLine:
@@ -187,8 +190,10 @@ class LogParser:
                 if parsed:
                     lines.append(parsed)
                     try:
-                        timestamps.append(datetime.fromisoformat(parsed.timestamp.replace("Z", "+00:00")))
-                    except:
+                        timestamps.append(
+                            datetime.fromisoformat(parsed.timestamp.replace("Z", "+00:00"))
+                        )
+                    except (ValueError, TypeError):
                         pass
 
         return ParsedLog(
@@ -290,14 +295,15 @@ class AnomalyInjector:
         # Adjust indices to account for inserted lines
         actual_window_start = window_start
         actual_window_end = window_start + sum(
-            1 for i in range(window_start, window_end)
-            if logs[i].component == target_component
+            1 for i in range(window_start, window_end) if logs[i].component == target_component
         )
 
         return modified_logs, {
             "anomaly_type": AnomalyType.ERROR_SPIKE.value,
             "component": target_component,
-            "start_time": logs[window_start].timestamp if window_start < len(logs) else logs[0].timestamp,
+            "start_time": logs[window_start].timestamp
+            if window_start < len(logs)
+            else logs[0].timestamp,
             "end_time": logs[min(window_end, len(logs) - 1)].timestamp,
             "intensity": intensity,
         }
@@ -313,9 +319,14 @@ class AnomalyInjector:
         if not components:
             components = ["jvm"]
 
-        target_component = self.rng.choice([c for c in components if any(
-            m.lower() in c.lower() for m in ["jvm", "gc", "memory", "heap"]
-        )] or components)
+        target_component = self.rng.choice(
+            [
+                c
+                for c in components
+                if any(m.lower() in c.lower() for m in ["jvm", "gc", "memory", "heap"])
+            ]
+            or components
+        )
 
         # Define gradual increase window
         start_idx = len(logs) // 5
@@ -374,7 +385,8 @@ class AnomalyInjector:
 
         # Remove logs in the window (simulate dropout)
         modified_logs = [
-            log for i, log in enumerate(logs)
+            log
+            for i, log in enumerate(logs)
             if not (dropout_start <= i <= dropout_end and log.component == target_component)
         ]
 
@@ -413,7 +425,7 @@ class AnomalyInjector:
             severity="WARN",
             component=component,
             message=f"GC pause: {gc_pause:.1f}ms, Heap: {memory_mb}MB / 4096MB",
-            raw_line=f"{timestamp} WARN {component} GC[ParNew]: {gc_pause:.1f}ms, heap: {memory_mb}->{memory_mb-100}MB",
+            raw_line=f"{timestamp} WARN {component} GC[ParNew]: {gc_pause:.1f}ms, heap: {memory_mb}->{memory_mb - 100}MB",
         )
 
     def _inject_cascade_failure(
@@ -455,11 +467,15 @@ class AnomalyInjector:
                     )
                     modified_logs.insert(i + 1, error_log)
 
-            cascade_stages.append({
-                "component": component,
-                "start_time": logs[stage_start].timestamp if stage_start < len(logs) else logs[0].timestamp,
-                "end_time": logs[min(stage_end, len(logs) - 1)].timestamp,
-            })
+            cascade_stages.append(
+                {
+                    "component": component,
+                    "start_time": logs[stage_start].timestamp
+                    if stage_start < len(logs)
+                    else logs[0].timestamp,
+                    "end_time": logs[min(stage_end, len(logs) - 1)].timestamp,
+                }
+            )
 
         return modified_logs, {
             "anomaly_type": AnomalyType.CASCADE_FAILURE.value,
@@ -577,9 +593,10 @@ class AnomalyInjector:
 
         # Auth anomalies typically come from auth_service or similar
         components = list(set(l.component for l in logs if l.component != "unknown"))
-        auth_component = self.rng.choice([
-            c for c in components if "auth" in c.lower() or "login" in c.lower()
-        ] or ["auth_service"])
+        auth_component = self.rng.choice(
+            [c for c in components if "auth" in c.lower() or "login" in c.lower()]
+            or ["auth_service"]
+        )
 
         # Define anomaly window
         start_idx = len(logs) // 4
@@ -640,7 +657,7 @@ class AnomalyInjector:
 def generate_synthetic_log(
     num_lines: int = 1000,
     num_components: int = 5,
-    seed: int = None,
+    seed: Optional[int] = None,
 ) -> Tuple[List[LogLine], Dict[str, Any]]:
     """
     Generate synthetic log data with ground truth.
@@ -655,7 +672,7 @@ def generate_synthetic_log(
     """
     rng = random.Random(seed)
 
-    components = [f"service_{chr(97+i)}" for i in range(num_components)]
+    components = [f"service_{chr(97 + i)}" for i in range(num_components)]
     severities = ["DEBUG", "INFO", "INFO", "INFO", "WARN"]
 
     base_time = datetime.now() - timedelta(hours=1)
@@ -674,12 +691,14 @@ def generate_synthetic_log(
             f"Data chunk {i} transferred successfully",
         ]
 
-        logs.append(LogLine(
-            timestamp=timestamp.isoformat(),
-            severity=severity,
-            component=component,
-            message=rng.choice(messages),
-            raw_line=f"{timestamp.isoformat()} {severity} {component} {rng.choice(messages)}",
-        ))
+        logs.append(
+            LogLine(
+                timestamp=timestamp.isoformat(),
+                severity=severity,
+                component=component,
+                message=rng.choice(messages),
+                raw_line=f"{timestamp.isoformat()} {severity} {component} {rng.choice(messages)}",
+            )
+        )
 
     return logs, {"num_lines": num_lines, "components": components}

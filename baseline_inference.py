@@ -46,6 +46,13 @@ from models import (
     BashCommand,
 )
 from grader import InvestigationGrader, calculate_summary_stats
+from config import (
+    MAX_STEPS,
+    MIN_STEPS_BEFORE_SUBMIT,
+    DEFAULT_MODEL,
+    DEFAULT_BASE_URL,
+    get_difficulty_config,
+)
 
 
 @dataclass
@@ -57,9 +64,9 @@ class ReactAgent:
     investigate log anomalies systematically.
     """
 
-    model: str = "Qwen/Qwen3.5-2B"
-    max_steps: int = 15
-    base_url: str = ""  # Empty means auto-detect
+    model: str = DEFAULT_MODEL
+    max_steps: int = MAX_STEPS
+    base_url: str = DEFAULT_BASE_URL
     client: OpenAI = field(init=False)
     _api_model: str = field(init=False)
 
@@ -561,7 +568,6 @@ def run_baseline_inference(
 
                     # Fix 4: Minimum steps before allowing submit
                     # Ensure we gather enough evidence before submitting
-                    MIN_STEPS_BEFORE_SUBMIT = 3
                     if action.action_type == "submit" and step < MIN_STEPS_BEFORE_SUBMIT:
                         # Force more investigation - use fallback command
                         print(f"(deferring submit, need more evidence) ", end="")

@@ -644,7 +644,7 @@ class LogHubFactory:
                 # OpenStack format: YYYY-MM-DD HH:MM:SS.microseconds
                 elif re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", sample):
                     return "OpenStack"
-        except:
+        except (IOError, UnicodeDecodeError):
             pass
 
         # Default to HDFS

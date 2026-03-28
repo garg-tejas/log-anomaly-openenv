@@ -13,10 +13,24 @@ from typing import Dict, Any, Optional, Tuple
 # Support both package and direct execution modes
 if __package__:
     from .models import AnomalyType, DifficultyLevel, SubmitAnswer, EpisodeResult
+    from .config import (
+        COMPONENT_WEIGHT,
+        TYPE_WEIGHT,
+        WINDOW_WEIGHT,
+        EFFICIENCY_WEIGHT,
+        DIFFICULTY_CONFIGS,
+    )
 else:
     # Direct execution mode
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from models import AnomalyType, DifficultyLevel, SubmitAnswer, EpisodeResult
+    from config import (
+        COMPONENT_WEIGHT,
+        TYPE_WEIGHT,
+        WINDOW_WEIGHT,
+        EFFICIENCY_WEIGHT,
+        DIFFICULTY_CONFIGS,
+    )
 
 
 class InvestigationGrader:
@@ -31,11 +45,11 @@ class InvestigationGrader:
     - Investigation efficiency (0.0 - 0.15)
     """
 
-    # Reward weights for each component
-    COMPONENT_WEIGHT = 0.25
-    TYPE_WEIGHT = 0.25
-    WINDOW_WEIGHT = 0.35
-    EFFICIENCY_WEIGHT = 0.15
+    # Reward weights - import from central config
+    COMPONENT_WEIGHT = COMPONENT_WEIGHT
+    TYPE_WEIGHT = TYPE_WEIGHT
+    WINDOW_WEIGHT = WINDOW_WEIGHT
+    EFFICIENCY_WEIGHT = EFFICIENCY_WEIGHT
 
     def grade(
         self,
@@ -286,32 +300,17 @@ class TaskGenerator:
     Tasks are created by combining:
     - Log data (real or synthetic)
     - Injected anomalies
-    - Difficulty settings
+    - Difficulty settings (from central config)
     """
 
+    # Use central config for difficulty settings
     DIFFICULTY_SETTINGS = {
-        DifficultyLevel.EASY: {
-            "intensity": 0.8,  # High intensity, obvious anomalies
-            "window_size_factor": 0.3,  # Large time windows
-            "allowed_anomaly_types": [AnomalyType.ERROR_SPIKE],
-        },
-        DifficultyLevel.MEDIUM: {
-            "intensity": 0.5,  # Moderate intensity
-            "window_size_factor": 0.2,  # Medium time windows
-            "allowed_anomaly_types": [
-                AnomalyType.ERROR_SPIKE,
-                AnomalyType.MEMORY_LEAK,
-                AnomalyType.SERVICE_DROPOUT,
-                AnomalyType.LATENCY_DEGRADATION,
-            ],
-        },
-        DifficultyLevel.HARD: {
-            "intensity": 0.6,  # Moderate intensity for cascade
-            "window_size_factor": 0.15,  # Moderate time windows for multi-stage cascade
-            "allowed_anomaly_types": [
-                AnomalyType.CASCADE_FAILURE,  # CASCADE ONLY - requires temporal reasoning
-            ],
-        },
+        level: {
+            "intensity": config.intensity,
+            "window_size_factor": config.window_size_factor,
+            "allowed_anomaly_types": list(config.allowed_anomaly_types),
+        }
+        for level, config in DIFFICULTY_CONFIGS.items()
     }
 
     def __init__(self, grader: InvestigationGrader):
