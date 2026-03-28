@@ -203,6 +203,9 @@ RULES:
         Returns:
             InvestigationAction to execute
         """
+        # Track whether we used fallback (for debugging)
+        self._last_parse_used_fallback = False
+
         # Handle Qwen thinking mode - extract content after </think>
         if "</think>" in thought:
             thought = thought.split("</think>")[-1].strip()
@@ -253,6 +256,7 @@ RULES:
                     )
 
         # === STEP 2: Fallback - use default investigation commands ===
+        self._last_parse_used_fallback = True
         return self._get_fallback_action(observation)
 
     def _get_fallback_action(self, observation: InvestigationObservation) -> InvestigationAction:
