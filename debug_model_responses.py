@@ -86,59 +86,29 @@ class DebugReactAgent(ReactAgent):
         # Try to parse
         action = super().parse_action(thought, observation)
 
-        # Analyze what happened
+        # Check if fallback was used (set by parent's parse_action)
+        used_fallback = getattr(self, "_last_parse_used_fallback", False)
+
+        # Build parsing info
         parsing_info = {
             "action_type": action.action_type,
-            "used_fallback": False,
-            "fallback_reason": None,
+            "used_fallback": used_fallback,
+            "fallback_reason": "No code block found" if used_fallback else None,
             "extracted_command": None,
             "extracted_submit": None,
         }
 
-        if action.action_type == "bash":
-            if action.bash_command:
-                parsing_info["extracted_command"] = action.bash_command.command
+        if action.action_type == "bash" and action.bash_command:
+            parsing_info["extracted_command"] = action.bash_command.command
 
-                # Check if this is a fallback command (from _get_fallback_action)
-                fallback_commands = [
-                    "grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn",
-                    "grep -iE 'cascade|dependency|affected by|circuit breaker' log.txt | head -15",
-                    "grep -iE 'latency|timeout|[0-9]+ms|slow' log.txt | head -15",
-                    "grep -iE 'memory|heap|gc|[0-9]+mb' log.txt | head -15",
-                    "grep ERROR log.txt | head -5 && echo '---' && grep ERROR log.txt | tail -5",
-                    "grep -E 'ERROR|FATAL' log.txt | head -20",
-                ]
-
-                # Only mark as fallback if the EXACT command matches a fallback
-                if action.bash_command.command in fallback_commands:
-                    # Check if model output contained a code block
-                    import re
-
-                    has_code_block = bool(re.search(r"```\w*\s*\n.*?```", thought, re.DOTALL))
-                    if not has_code_block:
-                        parsing_info["used_fallback"] = True
-                        parsing_info["fallback_reason"] = (
-                            "No code block found, used default command"
-                        )
-
-        elif action.action_type == "submit":
-            if action.answer:
-                parsing_info["extracted_submit"] = {
-                    "anomaly_type": action.answer.anomaly_type.value,
-                    "component": action.answer.component,
-                    "start_time": action.answer.start_time,
-                    "end_time": action.answer.end_time,
-                    "confidence": action.answer.confidence,
-                }
-
-                # Check if this looks like a genuine submission
-                if not action.answer.start_time or not action.answer.end_time:
-                    parsing_info["used_fallback"] = True
-                    parsing_info["fallback_reason"] = "Missing timestamps in submission"
-
-                if action.answer.component == "unknown":
-                    parsing_info["used_fallback"] = True
-                    parsing_info["fallback_reason"] = "Component is 'unknown'"
+        elif action.action_type == "submit" and action.answer:
+            parsing_info["extracted_submit"] = {
+                "anomaly_type": action.answer.anomaly_type.value,
+                "component": action.answer.component,
+                "start_time": action.answer.start_time,
+                "end_time": action.answer.end_time,
+                "confidence": action.answer.confidence,
+            }
 
         # Add parsing info to step log
         step_log["parsing"] = parsing_info
