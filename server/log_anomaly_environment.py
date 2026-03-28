@@ -27,6 +27,14 @@ if _parent_dir not in sys.path:
 # Import OpenEnv base classes
 from openenv.core.env_server.interfaces import Environment
 
+# Import central config
+from config import (
+    MAX_STEPS,
+    OUTPUT_TRUNCATION,
+    COMMAND_TIMEOUT,
+    ALLOWED_COMMANDS,
+    get_difficulty_config,
+)
 
 from log_utils import (
     LogParser,
@@ -56,32 +64,10 @@ from loghub_parser import LogHubFactory, LogHubSampler
 class InvestigationEpisode:
     """Manages a single investigation episode."""
 
-    MAX_STEPS = 15
-    OUTPUT_TRUNCATION = 4000  # Max characters in command output
-
-    # Allowed bash commands for security
-    ALLOWED_COMMANDS = [
-        "grep",
-        "egrep",
-        "fgrep",  # Pattern matching
-        "awk",
-        "sed",  # Text processing
-        "sort",
-        "uniq",
-        "wc",  # Counting/aggregation
-        "head",
-        "tail",
-        "cut",  # Selection
-        "cat",
-        "less",
-        "more",  # Display
-        "find",
-        "xargs",  # File search
-        "date",
-        "echo",  # Utilities
-        "ls",
-        "pwd",  # Navigation (read-only)
-    ]
+    # Use central config values (exposed as class attributes for backwards compat)
+    MAX_STEPS = MAX_STEPS
+    OUTPUT_TRUNCATION = OUTPUT_TRUNCATION
+    ALLOWED_COMMANDS = ALLOWED_COMMANDS
 
     # Forbidden patterns (security)
     FORBIDDEN_PATTERNS = [
@@ -446,7 +432,7 @@ class InvestigationEpisode:
                 cwd=self.sandbox_dir,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=COMMAND_TIMEOUT,
                 env=env,
             )
 
@@ -491,9 +477,9 @@ class InvestigationEpisode:
                     if gt_start <= ts <= gt_end:
                         reward += 0.02
                         break
-                except:
+                except (ValueError, TypeError):
                     pass
-        except:
+        except (ValueError, TypeError, AttributeError):
             pass
 
         # Penalize repetitive commands
