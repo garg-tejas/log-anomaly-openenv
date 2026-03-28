@@ -99,25 +99,27 @@ class DebugReactAgent(ReactAgent):
             if action.bash_command:
                 parsing_info["extracted_command"] = action.bash_command.command
 
-                # Check if this is a fallback command
+                # Check if this is a fallback command (from _get_fallback_action)
                 fallback_commands = [
-                    "wc -l log.txt && head -10 log.txt",
                     "grep ERROR log.txt | awk '{print $3}' | sort | uniq -c | sort -rn",
-                    "grep -iE 'cascade|dependency|affected",
-                    "grep -iE 'latency|timeout|[0-9]+ms",
-                    "grep -iE 'memory|heap|gc|[0-9]+mb",
+                    "grep -iE 'cascade|dependency|affected by|circuit breaker' log.txt | head -15",
+                    "grep -iE 'latency|timeout|[0-9]+ms|slow' log.txt | head -15",
+                    "grep -iE 'memory|heap|gc|[0-9]+mb' log.txt | head -15",
+                    "grep ERROR log.txt | head -5 && echo '---' && grep ERROR log.txt | tail -5",
+                    "grep -E 'ERROR|FATAL' log.txt | head -20",
                 ]
 
-                for fallback_cmd in fallback_commands:
-                    if fallback_cmd in action.bash_command.command:
-                        parsing_info["used_fallback"] = True
-                        parsing_info["fallback_reason"] = "Command matches default fallback pattern"
-                        break
+                # Only mark as fallback if the EXACT command matches a fallback
+                if action.bash_command.command in fallback_commands:
+                    # Check if model output contained a code block
+                    import re
 
-                # Check if model output had "Command:" prefix
-                if "command:" not in thought.lower() and "submit:" not in thought.lower():
-                    parsing_info["used_fallback"] = True
-                    parsing_info["fallback_reason"] = "No 'Command:' or 'Submit:' prefix found"
+                    has_code_block = bool(re.search(r"```\w*\s*\n.*?```", thought, re.DOTALL))
+                    if not has_code_block:
+                        parsing_info["used_fallback"] = True
+                        parsing_info["fallback_reason"] = (
+                            "No code block found, used default command"
+                        )
 
         elif action.action_type == "submit":
             if action.answer:
