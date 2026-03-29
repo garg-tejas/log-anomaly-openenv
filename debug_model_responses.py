@@ -24,14 +24,16 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from baseline_inference import ReactAgent
+from baseline_inference import ReactAgent, _to_observation
 from models import (
     LogAction,
+    LogState,
     InvestigationAction,
     InvestigationObservation,
     InvestigationState,
     DifficultyLevel,
     AnomalyType,
+    EnvironmentMode,
 )
 
 
@@ -315,37 +317,14 @@ def main() -> None:
 
     # Import environment (direct environment, not client)
     from server.log_anomaly_environment import LogAnomalyEnvironment
-    from models import EnvironmentMode, DifficultyLevel
 
     # Helper function to convert LogState to InvestigationState
-    def log_state_to_investigation(log_state):
+    def log_state_to_investigation(log_state: LogState) -> InvestigationState:
         return InvestigationState(
             episode_id=log_state.episode_id or "",
             step_count=log_state.step_count,
             log_file_path=log_state.log_file_path,
             task_id=log_state.task_id,
-            mode=EnvironmentMode(log_state.mode)
-            if isinstance(log_state.mode, str)
-            else log_state.mode,
-        )
-
-    # Helper function to convert LogObservation to InvestigationObservation
-    def log_obs_to_investigation(log_obs, log_state):
-        # Extract command history from metadata
-        cmd_history = []
-        if hasattr(log_obs, "metadata") and log_obs.metadata:
-            cmd_history = log_obs.metadata.get("command_history", [])
-
-        return InvestigationObservation(
-            command_output=log_obs.command_output,
-            command_history=cmd_history,
-            steps_remaining=log_obs.steps_remaining,
-            total_steps=log_obs.total_steps,
-            answer_submitted=log_obs.answer_submitted,
-            task_difficulty=DifficultyLevel(log_obs.task_difficulty)
-            if isinstance(log_obs.task_difficulty, str)
-            else log_obs.task_difficulty,
-            episode_reward=log_obs.reward,
             mode=EnvironmentMode(log_state.mode)
             if isinstance(log_state.mode, str)
             else log_state.mode,
@@ -364,7 +343,7 @@ def main() -> None:
         log_state = env.state
 
         # Convert to Investigation types
-        observation = log_obs_to_investigation(log_observation, log_state)
+        observation = _to_observation(log_observation)
         state = log_state_to_investigation(log_state)
 
         # Start episode tracking
@@ -393,7 +372,7 @@ def main() -> None:
             log_state = env.state
 
             # Convert to Investigation types
-            observation = log_obs_to_investigation(log_observation, log_state)
+            observation = _to_observation(log_observation)
             state = log_state_to_investigation(log_state)
 
         # Get final result

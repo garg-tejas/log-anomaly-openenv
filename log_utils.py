@@ -5,9 +5,9 @@ This module provides log parsing for various log formats and anomaly injection
 capabilities for creating synthetic training data.
 """
 
+import json
 import re
 import random
-import hashlib
 import sys
 import os
 from datetime import datetime, timedelta
@@ -17,10 +17,15 @@ from dataclasses import dataclass
 # Support both package and direct execution modes
 if __package__:
     from .models import AnomalyType, DifficultyLevel, LogLine
+    from .config import get_logger
 else:
     # Direct execution mode
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from models import AnomalyType, DifficultyLevel, LogLine
+    from config import get_logger
+
+# Set up logging for this module
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -80,7 +85,8 @@ class LogParser:
                 return self._parse_json(line)
             else:
                 return self._parse_generic(line)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to parse line with format '%s': %s", self.log_format, e)
             return self._parse_generic(line)
 
     def _parse_hdfs(self, line: str) -> LogLine:
@@ -193,8 +199,8 @@ class LogParser:
                         timestamps.append(
                             datetime.fromisoformat(parsed.timestamp.replace("Z", "+00:00"))
                         )
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug("Failed to parse timestamp '%s': %s", parsed.timestamp, e)
 
         return ParsedLog(
             lines=lines,

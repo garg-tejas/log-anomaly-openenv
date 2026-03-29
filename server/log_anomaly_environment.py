@@ -33,8 +33,14 @@ from config import (
     OUTPUT_TRUNCATION,
     COMMAND_TIMEOUT,
     ALLOWED_COMMANDS,
+    MAX_COMMAND_HISTORY,
     get_difficulty_config,
+    get_logger,
+    parse_timestamp,
 )
+
+# Set up logging for this module
+logger = get_logger(__name__)
 
 from log_utils import (
     LogParser,
@@ -362,8 +368,8 @@ class InvestigationEpisode:
         )
 
         # Cap history to prevent memory bloat
-        if len(self.command_history) > 10:
-            self.command_history = self.command_history[-10:]
+        if len(self.command_history) > MAX_COMMAND_HISTORY:
+            self.command_history = self.command_history[-MAX_COMMAND_HISTORY:]
 
         # Compute intermediate reward
         intermediate_reward = self._compute_intermediate_reward(stdout, stderr)
@@ -467,20 +473,20 @@ class InvestigationEpisode:
 
         # Check for timestamps in anomaly window
         try:
-            gt_start = self.grader._parse_timestamp(str(gt.get("start_time", "")))
-            gt_end = self.grader._parse_timestamp(str(gt.get("end_time", "")))
+            gt_start = parse_timestamp(str(gt.get("start_time", "")))
+            gt_end = parse_timestamp(str(gt.get("end_time", "")))
+
+            if gt_start is None or gt_end is None:
+                raise ValueError("Missing ground truth timestamps")
 
             timestamp_pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
             for match in re.finditer(timestamp_pattern, stdout):
-                try:
-                    ts = self.grader._parse_timestamp(match.group(0))
-                    if gt_start <= ts <= gt_end:
-                        reward += 0.02
-                        break
-                except (ValueError, TypeError):
-                    pass
-        except (ValueError, TypeError, AttributeError):
-            pass
+                ts = parse_timestamp(match.group(0))
+                if ts and gt_start <= ts <= gt_end:
+                    reward += 0.02
+                    break
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.debug("Failed to calculate step reward: %s", e)
 
         # Penalize repetitive commands
         if len(self.command_history) >= 3:
@@ -615,7 +621,7 @@ class LogAnomalyEnvironment(Environment):
             try:
                 log_source_enum = LogSource(log_source.upper())
             except ValueError:
-                pass
+                logger.debug("Invalid log source '%s', ignoring", log_source)
 
         # Generate episode
         log_content, ground_truth = self._generate_episode(
@@ -681,12 +687,8 @@ class LogAnomalyEnvironment(Environment):
             self.injector = AnomalyInjector(seed=seed)
 
         config = self.task_generator.get_task_config(difficulty)
-
-        num_lines = {
-            DifficultyLevel.EASY: 500,
-            DifficultyLevel.MEDIUM: 1000,
-            DifficultyLevel.HARD: 2000,
-        }.get(difficulty, 1000)
+        difficulty_config = get_difficulty_config(difficulty)
+        num_lines = difficulty_config.num_lines
 
         # Try LogHub data if requested
         if data_source == DataSource.LOGHUB and log_source:
@@ -755,8 +757,8 @@ class LogAnomalyEnvironment(Environment):
                 parser = LogHubFactory.get_parser(log_source.value, seed=seed)
                 logs, metadata = parser.parse_file(sample_file, max_lines=max_lines)
                 return logs, metadata
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to parse LogHub file %s: %s", sample_file, e)
 
         return None, None
 

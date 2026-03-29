@@ -10,17 +10,21 @@ import re
 import os
 import sys
 import random
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, NamedTuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # Support both package and direct execution modes
 if __package__:
     from .models import AnomalyType, DifficultyLevel, LogLine
+    from .config import get_logger
 else:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from models import AnomalyType, DifficultyLevel, LogLine
+    from config import get_logger
+
+# Set up logging for this module
+logger = get_logger(__name__)
 
 
 class LogHubMetadata(NamedTuple):
@@ -644,8 +648,8 @@ class LogHubFactory:
                 # OpenStack format: YYYY-MM-DD HH:MM:SS.microseconds
                 elif re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+", sample):
                     return "OpenStack"
-        except (IOError, UnicodeDecodeError):
-            pass
+        except (IOError, UnicodeDecodeError) as e:
+            logger.debug("Failed to auto-detect log format from %s: %s", filepath, e)
 
         # Default to HDFS
         return "HDFS"

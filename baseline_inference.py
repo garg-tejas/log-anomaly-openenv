@@ -40,19 +40,28 @@ from models import (
     InvestigationAction,
     InvestigationObservation,
     InvestigationState,
+    LogObservation,
     DifficultyLevel,
     AnomalyType,
     SubmitAnswer,
     BashCommand,
 )
-from grader import InvestigationGrader, calculate_summary_stats
+from grader import calculate_summary_stats
 from config import (
     MAX_STEPS,
     MIN_STEPS_BEFORE_SUBMIT,
     DEFAULT_MODEL,
     DEFAULT_BASE_URL,
-    get_difficulty_config,
+    HF_ROUTER_URL,
+    LLM_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    OUTPUT_PREVIEW_SHORT,
+    OUTPUT_PREVIEW_LONG,
+    get_logger,
 )
+
+# Set up logging for this module
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -87,7 +96,7 @@ class ReactAgent:
                 raise ValueError(
                     "No API key found. Set HF_TOKEN for HuggingFace or OPENAI_API_KEY for other providers."
                 )
-            base_url = "https://router.huggingface.co/v1"
+            base_url = HF_ROUTER_URL
             # Use :novita suffix for HuggingFace router
             self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
 
@@ -119,8 +128,8 @@ class ReactAgent:
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.7,
-            max_tokens=500,
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
         )
 
         content = response.choices[0].message.content
@@ -179,14 +188,14 @@ RULES:
             for cmd_entry in observation.command_history[-5:]:
                 prompt_parts.append(f"$ {cmd_entry['command']}")
                 output = cmd_entry["output"]
-                if len(output) > 400:
-                    output = output[:400] + "\n[truncated]"
+                if len(output) > OUTPUT_PREVIEW_SHORT:
+                    output = output[:OUTPUT_PREVIEW_SHORT] + "\n[truncated]"
                 prompt_parts.append(output)
             prompt_parts.append("")
 
         if observation.command_output and not observation.command_history:
             prompt_parts.append("=== OUTPUT ===")
-            prompt_parts.append(observation.command_output[:800])
+            prompt_parts.append(observation.command_output[:OUTPUT_PREVIEW_LONG])
 
         prompt_parts.append("\nReply with one code block:")
 
@@ -249,8 +258,8 @@ RULES:
                                 end_time=answer_data.get("end_time", ""),
                             ),
                         )
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as e:
+                        logger.debug("Failed to parse JSON submit answer: %s", e)
 
             # Bash block or unlabeled block = command
             if lang in ("bash", "sh", "") and not content.startswith("{"):
@@ -309,7 +318,7 @@ RULES:
             try:
                 return json.loads(nested_match.group(1))
             except json.JSONDecodeError:
-                pass
+                logger.debug("Nested JSON pattern failed to parse")
 
         # Pattern 2: Flat format {"anomaly_type": "...", "component": "...", ...}
         flat_match = re.search(r'\{[^}]*"anomaly_type"\s*:\s*"[^"]+[^}]*\}', thought)
@@ -317,7 +326,7 @@ RULES:
             try:
                 return json.loads(flat_match.group(0))
             except json.JSONDecodeError:
-                pass
+                logger.debug("Flat JSON pattern failed to parse")
 
         # Pattern 3: Any JSON object
         json_match = re.search(r"\{[^}]+\}", thought)
@@ -328,7 +337,7 @@ RULES:
                 if "anomaly_type" in data or "answer" in data:
                     return data.get("answer", data)
             except json.JSONDecodeError:
-                pass
+                logger.debug("Generic JSON pattern failed to parse")
 
         return None
 
@@ -534,16 +543,7 @@ def run_baseline_inference(
 
             # Reset environment
             obs_result = environment.reset(difficulty=diff, seed=episode_num)
-            # Handle both dict and object returns
-            if isinstance(obs_result, dict):
-                observation = _dict_to_observation(obs_result.get("observation", obs_result))
-            elif isinstance(obs_result, InvestigationObservation):
-                observation = obs_result
-            else:
-                # Try to convert from model
-                observation = _dict_to_observation(
-                    obs_result.model_dump() if hasattr(obs_result, "model_dump") else obs_result
-                )
+            observation = _to_observation(obs_result)
             state = environment.state
 
             # Run agent
@@ -589,15 +589,7 @@ def run_baseline_inference(
 
                 # Execute action
                 result = environment.step(action)
-                # Handle both dict and object returns
-                if isinstance(result, dict):
-                    observation = _dict_to_observation(result.get("observation", result))
-                elif isinstance(result, InvestigationObservation):
-                    observation = result
-                else:
-                    observation = _dict_to_observation(
-                        result.model_dump() if hasattr(result, "model_dump") else result
-                    )
+                observation = _to_observation(result)
                 state = environment.state
 
             # Grade episode
@@ -622,14 +614,37 @@ def _dict_to_observation(d: Dict[str, Any]) -> InvestigationObservation:
     """Convert dictionary to InvestigationObservation."""
     return InvestigationObservation(
         command_output=d.get("command_output", ""),
-        command_history=d.get("command_history", []),
+        command_history=d.get("command_history", d.get("metadata", {}).get("command_history", [])),
         steps_remaining=d.get("steps_remaining", 15),
         total_steps=d.get("total_steps", 15),
         answer_submitted=d.get("answer_submitted", False),
         task_difficulty=DifficultyLevel(d.get("task_difficulty", "easy")),
-        episode_reward=d.get("episode_reward", 0.0),
+        episode_reward=d.get("episode_reward", d.get("reward") or 0.0),
         metadata=d.get("metadata", {}),
     )
+
+
+def _to_observation(result: Any) -> InvestigationObservation:
+    """Convert any environment result to InvestigationObservation."""
+    if isinstance(result, InvestigationObservation):
+        return result
+    elif isinstance(result, LogObservation):
+        return InvestigationObservation(
+            command_output=result.command_output,
+            command_history=result.metadata.get("command_history", []),
+            steps_remaining=result.steps_remaining,
+            total_steps=result.total_steps,
+            answer_submitted=result.answer_submitted,
+            task_difficulty=DifficultyLevel(result.task_difficulty),
+            episode_reward=result.reward or 0.0,
+            metadata=result.metadata,
+        )
+    elif isinstance(result, dict):
+        return _dict_to_observation(result.get("observation", result))
+    elif hasattr(result, "model_dump"):
+        return _dict_to_observation(result.model_dump())
+    else:
+        return _dict_to_observation(result)
 
 
 def main() -> None:

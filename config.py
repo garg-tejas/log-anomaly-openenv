@@ -5,11 +5,94 @@ This module centralizes all configurable parameters to avoid magic numbers
 scattered throughout the codebase.
 """
 
+import logging
 import os
 from dataclasses import dataclass
-from typing import List, Tuple
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 from models import AnomalyType, DifficultyLevel
+
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+
+LOG_LEVEL = os.getenv("LOG_ANOMALY_LOG_LEVEL", "WARNING").upper()
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Get a configured logger for the given module name."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+        logger.addHandler(handler)
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.WARNING))
+    return logger
+
+
+# =============================================================================
+# Timestamp Parsing Utility
+# =============================================================================
+
+# Supported timestamp formats for parsing
+TIMESTAMP_FORMATS = [
+    "%Y-%m-%dT%H:%M:%S.%f",  # ISO with microseconds
+    "%Y-%m-%dT%H:%M:%S",  # ISO without microseconds
+    "%Y-%m-%d %H:%M:%S.%f",  # Space-separated with microseconds
+    "%Y-%m-%d %H:%M:%S",  # Space-separated without microseconds
+    "%Y-%m-%d-%H.%M.%S.%f",  # BGL format with microseconds
+    "%Y-%m-%d-%H.%M.%S",  # BGL format without microseconds
+]
+
+
+def parse_timestamp(ts: str) -> Optional[datetime]:
+    """
+    Parse a timestamp string into a datetime object.
+
+    Tries multiple common formats used in logs. Returns None if parsing fails.
+
+    Args:
+        ts: Timestamp string to parse
+
+    Returns:
+        Parsed datetime or None if all formats fail
+    """
+    if not ts:
+        return None
+
+    # Clean up the timestamp
+    clean_ts = ts.replace("Z", "+00:00").split("+")[0].strip()
+
+    for fmt in TIMESTAMP_FORMATS:
+        try:
+            return datetime.strptime(clean_ts, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
+def parse_timestamp_strict(ts: str) -> datetime:
+    """
+    Parse a timestamp string into a datetime object, raising on failure.
+
+    Args:
+        ts: Timestamp string to parse
+
+    Returns:
+        Parsed datetime
+
+    Raises:
+        ValueError: If timestamp cannot be parsed with any known format
+    """
+    result = parse_timestamp(ts)
+    if result is None:
+        raise ValueError(f"Could not parse timestamp: {ts}")
+    return result
 
 
 # =============================================================================
@@ -97,6 +180,22 @@ def get_difficulty_config(difficulty: DifficultyLevel) -> DifficultyConfig:
 
 DEFAULT_MODEL = os.getenv("LOG_ANOMALY_DEFAULT_MODEL", "Qwen/Qwen3.5-4B")
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
+HF_ROUTER_URL = "https://router.huggingface.co/v1"
+
+# LLM generation parameters
+LLM_TEMPERATURE = float(os.getenv("LOG_ANOMALY_LLM_TEMPERATURE", "0.7"))
+LLM_MAX_TOKENS = int(os.getenv("LOG_ANOMALY_LLM_MAX_TOKENS", "500"))
+
+# Output preview lengths for prompts (to avoid context overflow)
+OUTPUT_PREVIEW_SHORT = 400  # Short preview for recent command output
+OUTPUT_PREVIEW_LONG = 800  # Longer preview for full context
+
+
+# =============================================================================
+# Command History Configuration
+# =============================================================================
+
+MAX_COMMAND_HISTORY = 10  # Maximum number of commands to keep in history for reward shaping
 
 
 # =============================================================================
