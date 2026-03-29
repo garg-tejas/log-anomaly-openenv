@@ -8,4 +8,10 @@ vllm_server.log
 baseline_*.json
 debug_*.json
 outputs/
+
+# Keep markdown files local except README
+DEBUG_INSTRUCTIONS.md
+LIGHTNING_AI_COMMANDS.md
+QUICK_START.md
+VLLM_SETUP.md
 FUTURE.md
