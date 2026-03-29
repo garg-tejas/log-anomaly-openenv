@@ -8,7 +8,7 @@ performance on log anomaly investigation tasks.
 import sys
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
 # Support both package and direct execution modes
 if __package__:
@@ -18,7 +18,9 @@ if __package__:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
-        DIFFICULTY_CONFIGS,
+        get_difficulty_config,
+        get_logger,
+        parse_timestamp_strict,
     )
 else:
     # Direct execution mode
@@ -29,8 +31,13 @@ else:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
-        DIFFICULTY_CONFIGS,
+        get_difficulty_config,
+        get_logger,
+        parse_timestamp_strict,
     )
+
+# Set up logging for this module
+logger = get_logger(__name__)
 
 
 class InvestigationGrader:
@@ -214,7 +221,8 @@ class InvestigationGrader:
             pred_end_dt = self._parse_timestamp(pred_end)
             actual_start_dt = self._parse_timestamp(actual_start)
             actual_end_dt = self._parse_timestamp(actual_end)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to parse timestamps for window grading: %s", e)
             return 0.0
 
         # Calculate intersection over union
@@ -274,23 +282,8 @@ class InvestigationGrader:
         return max(0.0, min(1.0, efficiency))
 
     def _parse_timestamp(self, ts: str) -> datetime:
-        """Parse various timestamp formats."""
-        formats = [
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-            "%Y-%m-%dT%H:%M:%SZ",
-            "%Y-%m-%dT%H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d",
-        ]
-
-        for fmt in formats:
-            try:
-                return datetime.strptime(ts.replace("Z", "+00:00").split("+")[0], fmt)
-            except ValueError:
-                continue
-
-        raise ValueError(f"Could not parse timestamp: {ts}")
+        """Parse various timestamp formats using central utility."""
+        return parse_timestamp_strict(ts)
 
 
 class TaskGenerator:
@@ -302,16 +295,6 @@ class TaskGenerator:
     - Injected anomalies
     - Difficulty settings (from central config)
     """
-
-    # Use central config for difficulty settings
-    DIFFICULTY_SETTINGS = {
-        level: {
-            "intensity": config.intensity,
-            "window_size_factor": config.window_size_factor,
-            "allowed_anomaly_types": list(config.allowed_anomaly_types),
-        }
-        for level, config in DIFFICULTY_CONFIGS.items()
-    }
 
     def __init__(self, grader: InvestigationGrader):
         """
@@ -332,9 +315,12 @@ class TaskGenerator:
         Returns:
             Task configuration dictionary
         """
-        return self.DIFFICULTY_SETTINGS.get(
-            difficulty, self.DIFFICULTY_SETTINGS[DifficultyLevel.EASY]
-        )
+        config = get_difficulty_config(difficulty)
+        return {
+            "intensity": config.intensity,
+            "window_size_factor": config.window_size_factor,
+            "allowed_anomaly_types": list(config.allowed_anomaly_types),
+        }
 
     def list_tasks(self) -> Dict[str, Any]:
         """
