@@ -26,8 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description="Deploy to HuggingFace Spaces")
     parser.add_argument(
         "--repo-id",
-        default=os.getenv("HF_SPACE_ID", "garg-tejas/log-anomaly-env"),
-        help="HuggingFace Space repo ID (default: garg-tejas/log-anomaly-env)",
+        default=os.getenv("HF_SPACE_ID", "ggtejas/log-anomaly-env"),
+        help="HuggingFace Space repo ID (default: ggtejas/log-anomaly-env)",
     )
     parser.add_argument(
         "--create",

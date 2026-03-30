@@ -162,7 +162,7 @@ grep ERROR log.txt | head -10
 
 To submit your answer, reply with ONLY a json code block:
 ```json
-{"anomaly_type": "TYPE_HERE", "component": "SERVICE_HERE", "start_time": "TIMESTAMP_FROM_LOGS", "end_time": "TIMESTAMP_FROM_LOGS"}
+{{"anomaly_type": "TYPE_HERE", "component": "SERVICE_HERE", "start_time": "TIMESTAMP_FROM_LOGS", "end_time": "TIMESTAMP_FROM_LOGS"}}
 ```
 
 RULES:
