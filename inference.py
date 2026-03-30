@@ -49,6 +49,8 @@ from config import (
     HF_ROUTER_URL,
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
+    LLM_TOP_P,
+    LLM_PRESENCE_PENALTY,
     OUTPUT_PREVIEW_SHORT,
     OUTPUT_PREVIEW_LONG,
     get_logger,
@@ -128,7 +130,12 @@ class ReactAgent:
             ],
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            top_p=LLM_TOP_P,
+            presence_penalty=LLM_PRESENCE_PENALTY,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": True},  # Enable native thinking mode
+                "top_k": 20,  # Recommended by Qwen team
+            },
         )
 
         content = response.choices[0].message.content
