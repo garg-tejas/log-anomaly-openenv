@@ -127,16 +127,16 @@ tasks:
 
 # Baseline scores (from our testing)
 baseline_scores:
-  model: "Qwen/Qwen3.5-4B"
+  model: "Qwen/Qwen3.5-9B"
   easy:
-    mean_reward: 0.55
-    episodes: 5
+    mean_reward: 0.87
+    episodes: 3
   medium:
-    mean_reward: 0.42
-    episodes: 5
+    mean_reward: 0.64
+    episodes: 3
   hard:
-    mean_reward: 0.35
-    episodes: 5
+    mean_reward: 0.47
+    episodes: 3
 
 # Environment configuration
 config:

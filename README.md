@@ -190,22 +190,23 @@ Episodes are graded on four components:
 
 ## Baseline Scores
 
-Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting (30 episodes):
+Baseline results using `Qwen/Qwen3.5-9B` with ReAct prompting (9 episodes):
 
 | Difficulty  | Mean Reward | Component | Type | Window | Efficiency |
 | ----------- | ----------- | --------- | ---- | ------ | ---------- |
-| **Easy**    | 0.713       | 0.90      | 0.90 | 0.49   | 0.60       |
-| **Medium**  | 0.230       | 0.50      | 0.20 | 0.09   | 0.16       |
-| **Hard**    | 0.378       | 0.90      | 0.20 | 0.09   | 0.47       |
-| **Overall** | **0.440**   | 0.77      | 0.43 | 0.22   | 0.41       |
+| **Easy**    | 0.87        | 1.00      | 1.00 | 0.75   | 0.71       |
+| **Medium**  | 0.64        | 1.00      | 0.67 | 0.55   | 0.21       |
+| **Hard**    | 0.47        | 0.33      | 1.00 | 0.11   | 0.64       |
+| **Overall** | **0.66**    | 0.78      | 0.89 | 0.47   | 0.52       |
 
-_30 episodes (10 per difficulty). Hard tasks (cascade failure) and medium tasks (memory leak, latency degradation, service dropout) remain challenging for small models._
+_9 episodes (3 per difficulty). Hard tasks require identifying the root cause component in cascade failures, which remains challenging._
 
 ### Highlights
 
-- **Best episode**: 0.92 reward (easy_8) - near-perfect detection
-- **Easy tasks**: 90% component accuracy, 90% type accuracy
-- **Hard tasks**: 90% component accuracy, but cascade_failure type detection remains difficult (20%)
+- **Best episode**: 0.94 reward (easy) - near-perfect detection
+- **Easy tasks**: 100% component accuracy, 100% type accuracy
+- **Medium tasks**: 100% component accuracy, varied anomaly types (memory_leak, latency_degradation, service_dropout)
+- **Hard tasks**: Cascade failure type detection is strong (100%), but root cause identification is challenging (33%)
 
 ## Baseline Inference
 
