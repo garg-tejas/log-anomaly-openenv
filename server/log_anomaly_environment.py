@@ -440,6 +440,7 @@ class InvestigationEpisode:
                 "command": command,
                 "output_truncated": len(stdout) >= self.OUTPUT_TRUNCATION,
                 "intermediate_reward": intermediate_reward,
+                "command_history": self.command_history,  # Full history for prompt building
             },
         )
 
@@ -468,11 +469,37 @@ class InvestigationEpisode:
             )
 
         # If command contains pipes, validate each piped command
+        # But first, we need to handle pipes inside quoted strings (e.g., grep "ERROR|WARN")
         if "|" in command:
-            pipe_cmds = [p.strip().split()[0] for p in command.split("|") if p.strip()]
-            for pc in pipe_cmds:
-                if pc not in self.ALLOWED_COMMANDS:
-                    return False, f"Piped command not allowed: {pc}"
+            # Use shlex to properly parse, respecting quotes
+            # We'll manually find unquoted pipes by tracking quote state
+            pipe_positions = []
+            in_single_quote = False
+            in_double_quote = False
+            for i, char in enumerate(command):
+                if char == "'" and not in_double_quote:
+                    in_single_quote = not in_single_quote
+                elif char == '"' and not in_single_quote:
+                    in_double_quote = not in_double_quote
+                elif char == "|" and not in_single_quote and not in_double_quote:
+                    pipe_positions.append(i)
+
+            # Only validate if there are actual (unquoted) pipes
+            if pipe_positions:
+                # Split command at unquoted pipe positions
+                parts = []
+                prev = 0
+                for pos in pipe_positions:
+                    parts.append(command[prev:pos].strip())
+                    prev = pos + 1
+                parts.append(command[prev:].strip())
+
+                # Validate each piped command
+                for part in parts:
+                    if part:
+                        part_cmd = part.split()[0] if part.split() else ""
+                        if part_cmd and part_cmd not in self.ALLOWED_COMMANDS:
+                            return False, f"Piped command not allowed: {part_cmd}"
 
         return True, ""
 
