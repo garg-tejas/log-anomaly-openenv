@@ -34,6 +34,9 @@ from config import (
     COMMAND_TIMEOUT,
     ALLOWED_COMMANDS,
     MAX_COMMAND_HISTORY,
+    REWARD_TIMEOUT,
+    REWARD_REPEAT_COMMAND_PENALTY,
+    REWARD_REPEAT_WARNING_PENALTY,
     get_difficulty_config,
     get_logger,
     parse_timestamp,
@@ -221,11 +224,11 @@ class InvestigationEpisode:
         if self.step_count >= self.MAX_STEPS and action.action_type != "submit":
             # Wipe accumulated rewards - clear negative signal for GRPO
             wiped_reward = self.episode_reward
-            self.episode_reward = -0.5  # Strong negative final reward
+            self.episode_reward = REWARD_TIMEOUT  # Strong negative final reward (-2.0)
             self.answer_submitted = True  # Mark as done
 
             return LogObservation(
-                command_output="TIMEOUT: Investigation incomplete. No answer submitted. You get -0.5 reward.",
+                command_output=f"TIMEOUT: Investigation incomplete. No answer submitted. You get {REWARD_TIMEOUT} reward.",
                 stderr="Episode ended without submission",
                 exit_code=1,
                 steps_remaining=0,
@@ -362,7 +365,7 @@ class InvestigationEpisode:
 
         if repeat_count >= 2:
             # Block the command after 2 repeats (3rd attempt blocked)
-            self.episode_reward -= 0.3  # Strong penalty
+            self.episode_reward += REWARD_REPEAT_COMMAND_PENALTY  # Strong penalty (-0.3)
             return LogObservation(
                 command_output=f"BLOCKED: You've run this exact command {repeat_count + 1} times. Try a different approach.",
                 stderr="Repeated command blocked",
@@ -383,7 +386,7 @@ class InvestigationEpisode:
 
         # Escalating penalty for first repeat
         if repeat_count == 1:
-            self.episode_reward -= 0.1
+            self.episode_reward += REWARD_REPEAT_WARNING_PENALTY  # Warning penalty (-0.1)
 
         # Validate command
         is_valid, error_msg = self._validate_command(command)
@@ -759,7 +762,7 @@ class LogAnomalyEnvironment(Environment):
         data_source: DataSource = DataSource.SYNTHETIC,
         log_source: Optional[LogSource] = None,
     ) -> Tuple[List[LogLine], Dict[str, Any]]:
-        """Generate a new episode with injected anomaly."""
+        """Generate a new episode with injected anomaly and optional decoys."""
         import random
 
         if seed is not None:
@@ -772,6 +775,7 @@ class LogAnomalyEnvironment(Environment):
         config = self.task_generator.get_task_config(difficulty)
         difficulty_config = get_difficulty_config(difficulty)
         num_lines = difficulty_config.num_lines
+        num_decoys = difficulty_config.num_decoys  # Get decoy count from config
 
         # Try LogHub data if requested
         if data_source == DataSource.LOGHUB and log_source:
@@ -779,9 +783,12 @@ class LogAnomalyEnvironment(Environment):
             if logs:
                 anomaly_types = config["allowed_anomaly_types"]
                 anomaly_type = random.choice(anomaly_types)
-                modified_logs, ground_truth = self.injector.inject(
+
+                # Use inject_with_decoys for hidden state challenge
+                modified_logs, ground_truth = self.injector.inject_with_decoys(
                     logs=logs,
-                    anomaly_type=anomaly_type,
+                    primary_anomaly=anomaly_type,
+                    num_decoys=num_decoys,
                     intensity=config["intensity"],
                     seed=seed + 1 if seed else None,
                 )
@@ -806,9 +813,11 @@ class LogAnomalyEnvironment(Environment):
         anomaly_types = config["allowed_anomaly_types"]
         anomaly_type = random.choice(anomaly_types)
 
-        modified_logs, ground_truth = self.injector.inject(
+        # Use inject_with_decoys for hidden state challenge
+        modified_logs, ground_truth = self.injector.inject_with_decoys(
             logs=logs,
-            anomaly_type=anomaly_type,
+            primary_anomaly=anomaly_type,
+            num_decoys=num_decoys,
             intensity=config["intensity"],
             seed=seed + 1 if seed else None,
         )
