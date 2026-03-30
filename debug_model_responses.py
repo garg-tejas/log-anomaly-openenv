@@ -9,7 +9,7 @@ This script runs a small set of episodes and logs:
 - Command history at each step
 
 Usage:
-    python debug_model_responses.py --model Qwen/Qwen3.5-4B --episodes 3 --difficulty easy
+    python debug_model_responses.py --episodes 3 --difficulty easy
     python debug_model_responses.py --model Qwen/Qwen3.5-4B --episodes 2 --difficulty hard --output debug_hard.json
 """
 
@@ -21,9 +21,14 @@ from datetime import datetime
 from typing import List, Dict, Any
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import DEFAULT_MODEL
 from inference import ReactAgent, _to_observation
 from models import (
     LogAction,
@@ -267,8 +272,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="Qwen/Qwen3.5-4B",
-        help="Model to use for inference",
+        default=None,
+        help=f"Model to use (default: MODEL_NAME env var or {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--difficulty",
@@ -289,31 +294,22 @@ def main() -> None:
         default="debug_model_responses.json",
         help="Output file for debug logs",
     )
-    parser.add_argument(
-        "--base-url",
-        type=str,
-        default=None,
-        help="OpenAI-compatible API base URL",
-    )
 
     args = parser.parse_args()
 
-    # Setup - ReactAgent reads API key from environment, not constructor
-    base_url = args.base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
+    # Use model from CLI or fall back to environment variable
+    model = args.model or os.getenv("MODEL_NAME", DEFAULT_MODEL)
+    base_url = os.getenv("API_BASE_URL", "http://localhost:8080/v1")
 
-    # Ensure OPENAI_API_KEY is set in environment if not already
-    if "OPENAI_API_KEY" not in os.environ:
-        os.environ["OPENAI_API_KEY"] = "dummy"
-
-    print(f"🔍 Debug Model Responses")
-    print(f"Model: {args.model}")
+    print(f"Debug Model Responses")
+    print(f"Model: {model}")
     print(f"Difficulty: {args.difficulty}")
     print(f"Episodes: {args.episodes}")
     print(f"API Base URL: {base_url}")
     print(f"Output: {args.output}\n")
 
-    # Create debug agent (api_key read from environment by ReactAgent.__post_init__)
-    agent = DebugReactAgent(base_url=base_url, model=args.model)
+    # Create debug agent
+    agent = DebugReactAgent(base_url=base_url, model=model)
 
     # Import environment (direct environment, not client)
     from server.log_anomaly_environment import LogAnomalyEnvironment
