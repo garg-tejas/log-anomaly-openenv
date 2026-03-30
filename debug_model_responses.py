@@ -24,7 +24,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from baseline_inference import ReactAgent, _to_observation
+from inference import ReactAgent, _to_observation
 from models import (
     LogAction,
     LogState,

@@ -6,9 +6,13 @@ runtime: fastapi
 app: server.app:app
 port: 8000
 
-# HuggingFace Space metadata (used in README.md frontmatter)
-# These are duplicated here for openenv CLI compatibility
+# Environment metadata
 title: Log Anomaly Investigation Environment
+description: |
+  Train AI agents to diagnose production issues by investigating system logs.
+  Agents use bash commands (grep, awk, etc.) to analyze logs and identify
+  anomalies including error spikes, memory leaks, cascade failures, and more.
+
 emoji: "🔍"
 colorFrom: purple
 colorTo: blue
@@ -24,19 +28,132 @@ tags:
   - devops
   - sre
 
+# Action space definition
+action_space:
+  type: object
+  properties:
+    action_type:
+      type: string
+      enum: [bash, submit]
+      description: "Type of action: 'bash' to run a command, 'submit' to submit answer"
+    command:
+      type: string
+      description: "Bash command to execute (for action_type='bash')"
+    anomaly_type:
+      type: string
+      enum: [error_spike, memory_leak, service_dropout, cascade_failure, latency_degradation, auth_anomaly]
+      description: "Type of anomaly identified (for action_type='submit')"
+    component:
+      type: string
+      description: "Component affected by anomaly (for action_type='submit')"
+    start_time:
+      type: string
+      description: "Start time of anomaly window in ISO format (for action_type='submit')"
+    end_time:
+      type: string
+      description: "End time of anomaly window in ISO format (for action_type='submit')"
+
+# Observation space definition
+observation_space:
+  type: object
+  properties:
+    command_output:
+      type: string
+      description: "Output from the last bash command"
+    stderr:
+      type: string
+      description: "Standard error output"
+    exit_code:
+      type: integer
+      description: "Exit code from the last command"
+    steps_remaining:
+      type: integer
+      description: "Number of steps remaining in the episode"
+    total_steps:
+      type: integer
+      description: "Total steps allowed per episode"
+    answer_submitted:
+      type: boolean
+      description: "Whether an answer has been submitted"
+    task_difficulty:
+      type: string
+      description: "Current task difficulty level"
+    done:
+      type: boolean
+      description: "Whether the episode has terminated"
+    reward:
+      type: number
+      description: "Reward signal from the last action"
+
+# Reward structure
+reward:
+  range: [0.0, 1.0]
+  components:
+    component_score:
+      weight: 0.25
+      description: "Correct identification of affected component"
+    type_score:
+      weight: 0.25
+      description: "Correct identification of anomaly type"
+    window_score:
+      weight: 0.35
+      description: "Accuracy of time window (IoU-based)"
+    efficiency_score:
+      weight: 0.15
+      description: "Efficiency in number of steps used"
+
 # Task definitions (3 difficulty levels as required)
 tasks:
   easy:
     difficulty: easy
     description: "Find and identify obvious error spikes in system logs."
+    anomaly_types: [error_spike]
+    num_lines: 500
     expected_score_range: [0.6, 1.0]
 
   medium:
     difficulty: medium
-    description: "Investigate logs to identify various anomaly types."
+    description: "Investigate logs to identify various anomaly types including memory leaks and latency issues."
+    anomaly_types: [error_spike, memory_leak, service_dropout, latency_degradation]
+    num_lines: 1000
     expected_score_range: [0.4, 0.8]
 
   hard:
     difficulty: hard
-    description: "Investigate cascade failures requiring multi-hop temporal reasoning."
+    description: "Investigate cascade failures requiring multi-hop temporal reasoning across service dependencies."
+    anomaly_types: [cascade_failure]
+    num_lines: 2000
     expected_score_range: [0.3, 0.7]
+
+# Baseline scores (from our testing)
+baseline_scores:
+  model: "Qwen/Qwen3.5-4B"
+  easy:
+    mean_reward: 0.55
+    episodes: 5
+  medium:
+    mean_reward: 0.42
+    episodes: 5
+  hard:
+    mean_reward: 0.35
+    episodes: 5
+
+# Environment configuration
+config:
+  max_steps: 15
+  command_timeout: 10
+  output_truncation: 4000
+  allowed_commands:
+    - grep
+    - egrep
+    - awk
+    - sed
+    - cat
+    - head
+    - tail
+    - sort
+    - uniq
+    - wc
+    - cut
+    - find
+    - ls
