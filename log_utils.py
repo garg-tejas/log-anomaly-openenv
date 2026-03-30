@@ -659,6 +659,223 @@ class AnomalyInjector:
             raw_line=f"{timestamp} WARN {component} [AUTH] {message}",
         )
 
+    def inject_with_decoys(
+        self,
+        logs: List[LogLine],
+        primary_anomaly: AnomalyType,
+        num_decoys: int = 2,
+        intensity: float = 0.5,
+        seed: Optional[int] = None,
+    ) -> Tuple[List[LogLine], Dict[str, Any]]:
+        """
+        Inject primary anomaly plus decoy anomalies (hidden state).
+
+        Decoys are designed to look suspicious but are NOT the target anomaly.
+        They differ from the primary in either type or component, and have
+        lower intensity to make them less prominent.
+
+        This creates a more challenging task where the agent must identify
+        the PRIMARY anomaly among multiple suspicious patterns.
+
+        Args:
+            logs: Original log lines
+            primary_anomaly: Type of the primary (target) anomaly
+            num_decoys: Number of decoy anomalies to inject (0-3)
+            intensity: Primary anomaly intensity (0.0 to 1.0)
+            seed: Optional seed for reproducibility
+
+        Returns:
+            Tuple of (modified logs, ground truth with decoy info)
+        """
+        if seed is not None:
+            self.rng = random.Random(seed)
+
+        if num_decoys <= 0:
+            # No decoys, just inject primary
+            return self.inject(logs, primary_anomaly, intensity, seed)
+
+        # Get available components
+        components = list(set(l.component for l in logs if l.component != "unknown"))
+        if len(components) < 2:
+            components = [f"service_{chr(97 + i)}" for i in range(4)]
+
+        # Get available anomaly types for decoys (excluding primary type)
+        all_types = list(AnomalyType)
+        decoy_types = [t for t in all_types if t != primary_anomaly]
+
+        # First, inject the primary anomaly
+        modified_logs, primary_ground_truth = self.inject(logs, primary_anomaly, intensity, seed)
+
+        # Track decoy info for grading
+        decoys = []
+
+        # Select a different component for decoys when possible
+        primary_component = primary_ground_truth.get("component", "")
+        other_components = [c for c in components if c != primary_component]
+        if not other_components:
+            other_components = components
+
+        # Inject decoys with lower intensity in different time windows
+        for i in range(min(num_decoys, len(decoy_types))):
+            decoy_type = self.rng.choice(decoy_types)
+            decoy_component = self.rng.choice(other_components)
+
+            # Lower intensity for decoys (30-60% of primary)
+            decoy_intensity = intensity * (0.3 + self.rng.random() * 0.3)
+
+            # Inject decoy (we use a separate seed to get different windows)
+            decoy_seed = (seed + i + 100) if seed else None
+
+            # Temporarily modify the logs to inject decoy
+            # We need to inject into different time windows
+            try:
+                modified_logs, decoy_gt = self._inject_decoy(
+                    modified_logs,
+                    decoy_type,
+                    decoy_component,
+                    decoy_intensity,
+                    decoy_seed,
+                    primary_ground_truth,
+                )
+
+                decoys.append(
+                    {
+                        "anomaly_type": decoy_type.value,
+                        "component": decoy_gt.get("component", decoy_component),
+                        "start_time": decoy_gt.get("start_time", ""),
+                        "end_time": decoy_gt.get("end_time", ""),
+                        "intensity": decoy_intensity,
+                        "is_decoy": True,
+                    }
+                )
+            except Exception as e:
+                logger.debug("Failed to inject decoy %d: %s", i, e)
+                continue
+
+            # Remove used type from pool to avoid duplicate decoy types
+            decoy_types = [t for t in decoy_types if t != decoy_type]
+
+        # Add decoy info to ground truth
+        primary_ground_truth["decoys"] = decoys
+        primary_ground_truth["num_decoys"] = len(decoys)
+        primary_ground_truth["has_hidden_state"] = len(decoys) > 0
+
+        return modified_logs, primary_ground_truth
+
+    def _inject_decoy(
+        self,
+        logs: List[LogLine],
+        decoy_type: AnomalyType,
+        target_component: str,
+        intensity: float,
+        seed: Optional[int],
+        primary_gt: Dict[str, Any],
+    ) -> Tuple[List[LogLine], Dict[str, Any]]:
+        """
+        Inject a decoy anomaly avoiding the primary anomaly's time window.
+
+        Args:
+            logs: Current log lines
+            decoy_type: Type of decoy to inject
+            target_component: Component for the decoy
+            intensity: Decoy intensity (should be lower than primary)
+            seed: Random seed
+            primary_gt: Primary ground truth (to avoid overlapping windows)
+
+        Returns:
+            Tuple of (modified logs, decoy ground truth)
+        """
+        if seed is not None:
+            self.rng = random.Random(seed)
+
+        # Determine available time regions (avoid primary window)
+        # We'll use either first 1/4 or last 1/4 of logs
+        total_lines = len(logs)
+        use_early_window = self.rng.choice([True, False])
+
+        if use_early_window:
+            start_idx = 0
+            end_idx = total_lines // 4
+        else:
+            start_idx = total_lines * 3 // 4
+            end_idx = total_lines
+
+        # Extract subset of logs for decoy injection
+        decoy_logs = logs[start_idx:end_idx]
+
+        # Generate decoy patterns based on type
+        modified_logs = list(logs)
+        decoy_gt = {
+            "anomaly_type": decoy_type.value,
+            "component": target_component,
+            "intensity": intensity,
+        }
+
+        if decoy_type == AnomalyType.ERROR_SPIKE:
+            # Inject a few error messages
+            num_errors = max(2, int(len(decoy_logs) * intensity * 0.1))
+            for _ in range(num_errors):
+                idx = self.rng.randint(start_idx, min(end_idx - 1, len(modified_logs) - 1))
+                error_msg = self._generate_error_message(target_component, logs[idx].timestamp)
+                modified_logs.insert(idx + 1, error_msg)
+            decoy_gt["start_time"] = logs[start_idx].timestamp if start_idx < len(logs) else ""
+            decoy_gt["end_time"] = logs[min(end_idx, len(logs) - 1)].timestamp
+
+        elif decoy_type == AnomalyType.LATENCY_DEGRADATION:
+            # Inject a few latency warnings
+            num_latency = max(2, int(len(decoy_logs) * intensity * 0.1))
+            for _ in range(num_latency):
+                idx = self.rng.randint(start_idx, min(end_idx - 1, len(modified_logs) - 1))
+                latency_ms = 100 + self.rng.random() * 200  # Moderate latency
+                latency_msg = self._generate_latency_log(
+                    target_component, logs[idx].timestamp, latency_ms, intensity
+                )
+                modified_logs.insert(idx + 1, latency_msg)
+            decoy_gt["start_time"] = logs[start_idx].timestamp if start_idx < len(logs) else ""
+            decoy_gt["end_time"] = logs[min(end_idx, len(logs) - 1)].timestamp
+
+        elif decoy_type == AnomalyType.MEMORY_LEAK:
+            # Inject a few memory warnings (but not a leak pattern)
+            num_mem = max(2, int(len(decoy_logs) * intensity * 0.1))
+            for _ in range(num_mem):
+                idx = self.rng.randint(start_idx, min(end_idx - 1, len(modified_logs) - 1))
+                mem_val = 500 + self.rng.randint(0, 300)  # Random, not increasing
+                mem_msg = self._generate_memory_log(target_component, logs[idx].timestamp, mem_val)
+                modified_logs.insert(idx + 1, mem_msg)
+            decoy_gt["start_time"] = logs[start_idx].timestamp if start_idx < len(logs) else ""
+            decoy_gt["end_time"] = logs[min(end_idx, len(logs) - 1)].timestamp
+
+        elif decoy_type == AnomalyType.AUTH_ANOMALY:
+            # Inject a few auth failures (but not a sustained attack)
+            num_auth = max(2, int(len(decoy_logs) * intensity * 0.1))
+            decoy_ip = f"10.0.{self.rng.randint(1, 254)}.{self.rng.randint(1, 254)}"
+            for _ in range(num_auth):
+                idx = self.rng.randint(start_idx, min(end_idx - 1, len(modified_logs) - 1))
+                auth_msg = self._generate_auth_failure(
+                    target_component, logs[idx].timestamp, decoy_ip, "user_test"
+                )
+                modified_logs.insert(idx + 1, auth_msg)
+            decoy_gt["start_time"] = logs[start_idx].timestamp if start_idx < len(logs) else ""
+            decoy_gt["end_time"] = logs[min(end_idx, len(logs) - 1)].timestamp
+
+        else:
+            # For other types, inject generic warnings
+            num_warns = max(2, int(len(decoy_logs) * intensity * 0.1))
+            for _ in range(num_warns):
+                idx = self.rng.randint(start_idx, min(end_idx - 1, len(modified_logs) - 1))
+                warn_msg = LogLine(
+                    timestamp=logs[idx].timestamp,
+                    severity="WARN",
+                    component=target_component,
+                    message=f"Potential issue detected in {target_component}",
+                    raw_line=f"{logs[idx].timestamp} WARN {target_component} Potential issue detected",
+                )
+                modified_logs.insert(idx + 1, warn_msg)
+            decoy_gt["start_time"] = logs[start_idx].timestamp if start_idx < len(logs) else ""
+            decoy_gt["end_time"] = logs[min(end_idx, len(logs) - 1)].timestamp
+
+        return modified_logs, decoy_gt
+
 
 def generate_synthetic_log(
     num_lines: int = 1000,

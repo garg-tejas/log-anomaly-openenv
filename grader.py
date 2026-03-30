@@ -18,6 +18,11 @@ if __package__:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
+        REWARD_WRONG_TYPE_PENALTY,
+        REWARD_WRONG_COMPONENT_PENALTY,
+        REWARD_DECOY_PENALTY,
+        REWARD_PERFECT_BASE,
+        REWARD_PERFECT_FAST_BONUS,
         get_difficulty_config,
         get_logger,
         parse_timestamp_strict,
@@ -31,6 +36,11 @@ else:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
+        REWARD_WRONG_TYPE_PENALTY,
+        REWARD_WRONG_COMPONENT_PENALTY,
+        REWARD_DECOY_PENALTY,
+        REWARD_PERFECT_BASE,
+        REWARD_PERFECT_FAST_BONUS,
         get_difficulty_config,
         get_logger,
         parse_timestamp_strict,
@@ -66,7 +76,12 @@ class InvestigationGrader:
         total_steps: int = 15,
     ) -> EpisodeResult:
         """
-        Grade an episode.
+        Grade an episode with expanded reward range (-2.0 to +5.0).
+
+        Reward calculation:
+        - Base: weighted sum of component, type, window, efficiency scores (0-1)
+        - Penalties: wrong type (-0.5), wrong component (-0.5), decoy match (-0.3)
+        - Bonuses: perfect answer + high efficiency can reach +5.0
 
         Args:
             prediction: Agent's submitted answer
@@ -117,13 +132,42 @@ class InvestigationGrader:
         # Calculate efficiency score
         efficiency_score = self._grade_efficiency(steps_used, total_steps)
 
-        # Total reward
-        total_reward = (
+        # Check if prediction matches a decoy instead of primary anomaly
+        decoy_matched = self._check_decoy_match(prediction, ground_truth)
+
+        # === EXPANDED REWARD CALCULATION ===
+        # Start with weighted base score (0-1 range)
+        base_reward = (
             component_score * self.COMPONENT_WEIGHT
             + type_score * self.TYPE_WEIGHT
             + window_score * self.WINDOW_WEIGHT
             + efficiency_score * self.EFFICIENCY_WEIGHT
         )
+
+        # Apply penalties for wrong answers
+        penalties = 0.0
+        if type_score == 0.0:
+            penalties += REWARD_WRONG_TYPE_PENALTY  # -0.5
+        if component_score == 0.0:
+            penalties += REWARD_WRONG_COMPONENT_PENALTY  # -0.5
+        if decoy_matched:
+            penalties += REWARD_DECOY_PENALTY  # -0.3
+
+        # Apply bonus for perfect + fast answers
+        bonus = 0.0
+        is_perfect = (
+            component_score == 1.0
+            and type_score == 1.0
+            and window_score >= 0.8  # Allow some window tolerance
+        )
+        if is_perfect:
+            # Scale bonus by efficiency (0 to REWARD_PERFECT_FAST_BONUS)
+            # Perfect efficiency (1.0) = full bonus, low efficiency (0.0) = no bonus
+            bonus = efficiency_score * REWARD_PERFECT_FAST_BONUS
+
+        # Final reward: base + bonus + penalties
+        # Range: -1.0 (both wrong) to +5.0 (perfect + fast)
+        total_reward = base_reward + bonus + penalties
 
         return EpisodeResult(
             episode_id=ground_truth.get("episode_id", "unknown"),
@@ -138,6 +182,7 @@ class InvestigationGrader:
             ground_truth=ground_truth,
             steps_used=steps_used,
             episode_complete=True,
+            decoy_matched=decoy_matched,
         )
 
     def _grade_component(
@@ -280,6 +325,56 @@ class InvestigationGrader:
         # Linear decay: 1.0 at 1 step, 0.0 at total_steps
         efficiency = 1.0 - ((steps_used - 1) / (total_steps - 1))
         return max(0.0, min(1.0, efficiency))
+
+    def _check_decoy_match(
+        self,
+        prediction: SubmitAnswer,
+        ground_truth: Dict[str, Any],
+    ) -> bool:
+        """
+        Check if the prediction matches a decoy anomaly instead of the primary.
+
+        Decoys are stored in ground_truth["decoys"] as a list of dicts with:
+        - anomaly_type: str
+        - component: str
+        - start_time: str
+        - end_time: str
+
+        Args:
+            prediction: Agent's submitted answer
+            ground_truth: Ground truth with optional decoys list
+
+        Returns:
+            True if prediction matches a decoy, False otherwise
+        """
+        decoys = ground_truth.get("decoys", [])
+        if not decoys:
+            return False
+
+        pred_type = prediction.anomaly_type.value
+        pred_component = prediction.component.lower().strip()
+
+        for decoy in decoys:
+            decoy_type = decoy.get("anomaly_type", "")
+            decoy_component = decoy.get("component", "").lower().strip()
+
+            # Check if prediction matches this decoy
+            type_match = pred_type == decoy_type
+            component_match = (
+                pred_component == decoy_component
+                or pred_component in decoy_component
+                or decoy_component in pred_component
+            )
+
+            if type_match and component_match:
+                logger.debug(
+                    "Prediction matches decoy: type=%s, component=%s",
+                    decoy_type,
+                    decoy_component,
+                )
+                return True
+
+        return False
 
     def _parse_timestamp(self, ts: str) -> datetime:
         """Parse various timestamp formats using central utility."""

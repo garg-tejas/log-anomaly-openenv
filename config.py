@@ -121,6 +121,21 @@ TYPE_WEIGHT = 0.25  # Weight for correct anomaly type
 WINDOW_WEIGHT = 0.35  # Weight for accurate time window
 EFFICIENCY_WEIGHT = 0.15  # Weight for step efficiency
 
+# =============================================================================
+# Expanded Reward Range Configuration (Winner-Inspired)
+# =============================================================================
+# Reward range: -2.0 to +5.0 (inspired by Kube SRE Gym winner)
+# This provides stronger learning signals for GRPO/RL training
+
+REWARD_TIMEOUT = -2.0  # No submission before max steps
+REWARD_WRONG_TYPE_PENALTY = -0.5  # Penalty for incorrect anomaly type
+REWARD_WRONG_COMPONENT_PENALTY = -0.5  # Penalty for incorrect component
+REWARD_DECOY_PENALTY = -0.3  # Penalty for identifying decoy as primary anomaly
+REWARD_PERFECT_BASE = 1.0  # Base reward for correct answer
+REWARD_PERFECT_FAST_BONUS = 4.0  # Bonus for perfect + fast (total up to 5.0)
+REWARD_REPEAT_COMMAND_PENALTY = -0.3  # Penalty for repeating same command (blocked)
+REWARD_REPEAT_WARNING_PENALTY = -0.1  # Warning penalty for first repeat
+
 
 # =============================================================================
 # Difficulty Configuration
@@ -135,6 +150,7 @@ class DifficultyConfig:
     intensity: float
     window_size_factor: float
     allowed_anomaly_types: Tuple[AnomalyType, ...]
+    num_decoys: int = 0  # Number of decoy anomalies to inject (hidden state)
 
     @property
     def anomaly_type_values(self) -> List[str]:
@@ -148,6 +164,7 @@ DIFFICULTY_CONFIGS = {
         intensity=0.8,
         window_size_factor=0.3,
         allowed_anomaly_types=(AnomalyType.ERROR_SPIKE,),
+        num_decoys=0,  # No decoys for easy mode
     ),
     DifficultyLevel.MEDIUM: DifficultyConfig(
         num_lines=1000,
@@ -159,12 +176,14 @@ DIFFICULTY_CONFIGS = {
             AnomalyType.SERVICE_DROPOUT,
             AnomalyType.LATENCY_DEGRADATION,
         ),
+        num_decoys=1,  # 1 decoy for medium mode
     ),
     DifficultyLevel.HARD: DifficultyConfig(
         num_lines=2000,
         intensity=0.6,
         window_size_factor=0.15,
         allowed_anomaly_types=(AnomalyType.CASCADE_FAILURE,),
+        num_decoys=2,  # 2 decoys for hard mode
     ),
 }
 

@@ -1,0 +1,93 @@
+2024-01-15T10:23:45.123456Z INFO nova.compute.manager Starting instance i-00000001 on host compute-01
+2024-01-15T10:23:45.234567Z INFO nova.scheduler.filter Filtering hosts for instance i-00000001
+2024-01-15T10:23:45.345678Z DEBUG nova.virt.libvirt.driver Launching instance i-00000001
+2024-01-15T10:23:45.456789Z INFO neutron.agent.dhcp DHCP configuration updated for network net-001
+2024-01-15T10:23:45.567890Z INFO nova.compute.resource_tracker Updating available resources for host compute-01
+2024-01-15T10:23:45.678901Z INFO cinder.volume.driver Creating volume vol-00001 on backend ceph
+2024-01-15T10:23:45.789012Z DEBUG nova.api.openstack.wsgi HTTP GET /v2/servers returned 200
+2024-01-15T10:23:45.890123Z INFO keystone.token.provider Token validation successful for user admin
+2024-01-15T10:23:45.901234Z INFO glance.api.v2.images Image img-001 download started
+2024-01-15T10:23:46.012345Z INFO nova.compute.manager Instance i-00000001 spawned successfully
+2024-01-15T10:23:46.123456Z DEBUG neutron.plugins.ml2.drivers Port binding for port-001 complete
+2024-01-15T10:23:46.234567Z INFO cinder.scheduler.manager Volume vol-00001 scheduled on ceph backend
+2024-01-15T10:23:46.345678Z INFO heat.engine.stack Stack my-stack CREATE_IN_PROGRESS
+2024-01-15T10:23:46.456789Z INFO nova.scheduler.manager Selected host compute-02 for instance i-00000002
+2024-01-15T10:23:46.567890Z INFO neutron.agent.l3 Router router-001 interface added
+2024-01-15T10:23:46.678901Z DEBUG nova.virt.libvirt.config Generating libvirt XML for instance i-00000002
+2024-01-15T10:23:46.789012Z INFO keystone.middleware.auth Authenticated request from user project-admin
+2024-01-15T10:23:46.890123Z INFO glance.store.backend Image img-002 stored in swift backend
+2024-01-15T10:23:46.901234Z INFO nova.compute.claims Resource claim for instance i-00000002 succeeded
+2024-01-15T10:23:47.012345Z INFO cinder.volume.api Volume vol-00002 creation started
+2024-01-15T10:23:47.123456Z DEBUG neutron.agent.dhcp Spawning DHCP process for network net-002
+2024-01-15T10:23:47.234567Z INFO nova.api.metadata Metadata request processed for instance i-00000001
+2024-01-15T10:23:47.345678Z INFO heat.engine.resource Resource my-server CREATE_COMPLETE
+2024-01-15T10:23:47.456789Z INFO keystone.credential Credential created for user service-account
+2024-01-15T10:23:47.567890Z INFO nova.compute.manager Rebooting instance i-00000003
+2024-01-15T10:23:47.678901Z DEBUG cinder.backup.drivers Backup job backup-001 initiated
+2024-01-15T10:23:47.789012Z INFO neutron.plugins.ml2.plugin Port port-002 created in network net-001
+2024-01-15T10:23:47.890123Z INFO glance.api.v2.images Image img-003 visibility set to public
+2024-01-15T10:23:47.901234Z INFO nova.conductor.manager Migration task for i-00000004 started
+2024-01-15T10:23:48.012345Z INFO keystone.assignment Role admin granted to user operator on project demo
+2024-01-15T10:23:48.123456Z DEBUG nova.virt.libvirt.driver Attaching volume vol-00001 to instance i-00000001
+2024-01-15T10:23:48.234567Z INFO cinder.volume.flows.manager Volume vol-00002 ready for attachment
+2024-01-15T10:23:48.345678Z INFO neutron.agent.metadata Metadata proxy started for network net-001
+2024-01-15T10:23:48.456789Z INFO heat.engine.stack Stack my-stack CREATE_COMPLETE
+2024-01-15T10:23:48.567890Z DEBUG nova.scheduler.weights Weighing hosts for instance i-00000005
+2024-01-15T10:23:48.678901Z INFO glance.registry Image img-004 registered successfully
+2024-01-15T10:23:48.789012Z INFO keystone.token.persistence Token cleanup completed
+2024-01-15T10:23:48.890123Z INFO nova.compute.resource_tracker Compute node compute-01 capacity updated
+2024-01-15T10:23:48.901234Z INFO cinder.scheduler.flows Volume vol-00003 scheduling started
+2024-01-15T10:23:49.012345Z DEBUG neutron.agent.ovs_cleanup OVS ports cleaned up on compute-02
+2024-01-15T10:23:49.123456Z INFO nova.api.openstack.compute Server list request processed
+2024-01-15T10:23:49.234567Z INFO heat.engine.resources Resource my-network CREATE_IN_PROGRESS
+2024-01-15T10:23:49.345678Z INFO keystone.catalog Service endpoint updated for nova
+2024-01-15T10:23:49.456789Z DEBUG nova.virt.libvirt.guest Guest domain started for instance i-00000002
+2024-01-15T10:23:49.567890Z INFO cinder.volume.manager Volume vol-00003 created successfully
+2024-01-15T10:23:49.678901Z INFO neutron.db.db_base_plugin Network net-003 created
+2024-01-15T10:23:49.789012Z INFO glance.api.v2.image_data Image img-005 data upload started
+2024-01-15T10:23:49.890123Z INFO nova.conductor.tasks.migrate Instance i-00000004 live migration started
+2024-01-15T10:23:49.901234Z DEBUG keystone.common.wsgi Processing authentication request
+2024-01-15T10:23:50.012345Z INFO cinder.backup.manager Backup backup-001 completed
+2024-01-15T10:23:50.123456Z INFO neutron.agent.l3 Floating IP 10.0.0.5 associated with port-003
+2024-01-15T10:23:50.234567Z INFO nova.compute.manager Instance i-00000005 spawning started
+2024-01-15T10:23:50.345678Z INFO heat.engine.stack Stack my-stack-2 CREATE_IN_PROGRESS
+2024-01-15T10:23:50.456789Z INFO glance.store.swift Image img-005 chunks uploaded
+2024-01-15T10:23:50.567890Z DEBUG nova.network.neutronv2 Refreshing security group rules for instance i-00000001
+2024-01-15T10:23:50.678901Z INFO keystone.identity User new-user created in domain default
+2024-01-15T10:23:50.789012Z INFO cinder.volume.api Snapshot snap-001 creation initiated
+2024-01-15T10:23:50.890123Z INFO neutron.plugins.ml2.ovo Subnet subnet-001 created in network net-003
+2024-01-15T10:23:50.901234Z INFO nova.api.metadata Cloud-init data served to instance i-00000002
+2024-01-15T10:23:51.012345Z DEBUG heat.engine.dependencies Resource dependency graph computed
+2024-01-15T10:23:51.123456Z INFO glance.api.v2.images Image img-005 active
+2024-01-15T10:23:51.234567Z INFO nova.scheduler.client.report Placement resource provider updated
+2024-01-15T10:23:51.345678Z INFO keystone.oauth1 OAuth request token generated
+2024-01-15T10:23:51.456789Z INFO cinder.scheduler.manager Volume vol-00004 scheduled on lvm backend
+2024-01-15T10:23:51.567890Z DEBUG neutron.agent.dhcp DHCP lease granted for IP 192.168.1.10
+2024-01-15T10:23:51.678901Z INFO nova.compute.manager Instance i-00000005 spawned successfully
+2024-01-15T10:23:51.789012Z INFO heat.engine.resource Resource my-subnet CREATE_COMPLETE
+2024-01-15T10:23:51.890123Z INFO glance.common.wsgi Glance API request completed
+2024-01-15T10:23:51.901234Z INFO nova.conductor.manager Migration task for i-00000004 completed
+2024-01-15T10:23:52.012345Z DEBUG keystone.auth.plugins MFA validation passed for user admin
+2024-01-15T10:23:52.123456Z INFO cinder.volume.driver Volume vol-00004 ready
+2024-01-15T10:23:52.234567Z INFO neutron.agent.l3 Router router-001 HA state active
+2024-01-15T10:23:52.345678Z INFO nova.api.openstack.wsgi Server create request accepted
+2024-01-15T10:23:52.456789Z INFO heat.engine.stack Stack my-stack-2 CREATE_COMPLETE
+2024-01-15T10:23:52.567890Z INFO glance.api.v2.images Image img-006 created
+2024-01-15T10:23:52.678901Z INFO keystone.resource Project demo quota updated
+2024-01-15T10:23:52.789012Z DEBUG cinder.volume.flows.api Volume vol-00005 API flow started
+2024-01-15T10:23:52.890123Z INFO neutron.plugins.ml2.plugin Security group sg-001 created
+2024-01-15T10:23:52.901234Z INFO nova.compute.resource_tracker Host compute-02 VCPU usage: 8/32
+2024-01-15T10:23:53.012345Z INFO heat.engine.resources Resource my-port CREATE_IN_PROGRESS
+2024-01-15T10:23:53.123456Z DEBUG glance.store.backend Fetching image img-001 from swift
+2024-01-15T10:23:53.234567Z INFO keystone.token.provider Token issued for user operator
+2024-01-15T10:23:53.345678Z INFO nova.scheduler.filter Host compute-03 passed all filters
+2024-01-15T10:23:53.456789Z INFO cinder.volume.manager Snapshot snap-001 created
+2024-01-15T10:23:53.567890Z INFO neutron.agent.metadata Metadata cache refreshed
+2024-01-15T10:23:53.678901Z DEBUG nova.virt.libvirt.driver Defining domain XML for instance i-00000006
+2024-01-15T10:23:53.789012Z INFO heat.engine.resource Resource my-port CREATE_COMPLETE
+2024-01-15T10:23:53.890123Z INFO glance.api.v2.image_members Image img-001 shared with project demo
+2024-01-15T10:23:53.901234Z INFO keystone.middleware.auth Request authorized for service nova
+2024-01-15T10:23:54.012345Z INFO nova.compute.claims Resource claim succeeded for instance i-00000006
+2024-01-15T10:23:54.123456Z INFO cinder.backup.drivers Incremental backup backup-002 started
+2024-01-15T10:23:54.234567Z DEBUG neutron.agent.ovs_lib OVS bridge br-int configured
+2024-01-15T10:23:54.345678Z INFO nova.api.metadata Metadata available for instance i-00000005

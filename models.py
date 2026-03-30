@@ -301,3 +301,4 @@ class EpisodeResult(BaseModel):
     ground_truth: Dict[str, Any]
     steps_used: int
     episode_complete: bool
+    decoy_matched: bool = False  # True if agent identified a decoy instead of primary
