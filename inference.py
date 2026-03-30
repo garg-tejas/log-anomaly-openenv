@@ -1,15 +1,21 @@
 """
-Baseline Inference Script for Log Anomaly Investigation.
+Inference Script for Log Anomaly Investigation Environment.
+===================================
+MANDATORY
+- Before submitting, ensure the following variables are defined in your environment configuration:
+    API_BASE_URL   The API endpoint for the LLM.
+    MODEL_NAME     The model identifier to use for inference.
+    HF_TOKEN       Your Hugging Face / API key.
 
-This script provides baseline performance using ReAct prompting with Qwen
-via HuggingFace router.
+- The inference script must be named `inference.py` and placed in the root directory of the project
+- Participants must use OpenAI Client for all LLM calls using above variables
 
 Usage:
     # Run from command line
-    python baseline_inference.py --difficulty easy --episodes 5
+    python inference.py --difficulty easy --episodes 5
 
     # Or import and use programmatically
-    from baseline_inference import run_baseline_inference, ReactAgent
+    from inference import run_baseline_inference, ReactAgent
 
     results = run_baseline_inference(
         environment=env,
@@ -51,7 +57,6 @@ from config import (
     MAX_STEPS,
     MIN_STEPS_BEFORE_SUBMIT,
     DEFAULT_MODEL,
-    DEFAULT_BASE_URL,
     HF_ROUTER_URL,
     LLM_TEMPERATURE,
     LLM_MAX_TOKENS,
@@ -63,6 +68,14 @@ from config import (
 # Set up logging for this module
 logger = get_logger(__name__)
 
+# =============================================================================
+# Environment Variables (as required by hackathon)
+# =============================================================================
+
+API_BASE_URL = os.getenv("API_BASE_URL", HF_ROUTER_URL)
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", DEFAULT_MODEL)
+
 
 @dataclass
 class ReactAgent:
@@ -73,32 +86,28 @@ class ReactAgent:
     investigate log anomalies systematically.
     """
 
-    model: str = DEFAULT_MODEL
+    model: str = MODEL_NAME
     max_steps: int = MAX_STEPS
-    base_url: str = DEFAULT_BASE_URL
+    base_url: str = API_BASE_URL
     client: OpenAI = field(init=False)
     _api_model: str = field(init=False)
 
     def __post_init__(self) -> None:
         """Initialize the OpenAI-compatible client."""
-        # Determine base URL and API key
-        # Priority: explicit base_url > OPENAI_BASE_URL env > HuggingFace router
-        base_url = self.base_url or os.environ.get("OPENAI_BASE_URL", "")
+        # Use hackathon-required environment variables
+        base_url = self.base_url or API_BASE_URL
+        api_key = API_KEY
 
-        if base_url:
-            # Using custom endpoint (local LLM, vLLM, Ollama, etc.)
-            api_key = os.environ.get("OPENAI_API_KEY", "local")
-            self._api_model = self.model
-        else:
-            # Default to HuggingFace router
-            api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "No API key found. Set HF_TOKEN for HuggingFace or OPENAI_API_KEY for other providers."
-                )
-            base_url = HF_ROUTER_URL
-            # Use :novita suffix for HuggingFace router
+        if not api_key:
+            raise ValueError(
+                "No API key found. Set HF_TOKEN, API_KEY, or OPENAI_API_KEY environment variable."
+            )
+
+        # For HuggingFace router, append :novita suffix
+        if "huggingface" in base_url.lower():
             self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
+        else:
+            self._api_model = self.model
 
         self.client = OpenAI(
             base_url=base_url,
@@ -492,9 +501,9 @@ def _guess_submit_answer(observation: InvestigationObservation) -> SubmitAnswer:
 def run_baseline_inference(
     environment: Any,
     difficulty: str = "all",
-    model: str = "Qwen/Qwen3.5-2B",
+    model: Optional[str] = None,
     num_episodes: int = 3,
-    max_steps: int = 15,
+    max_steps: int = MAX_STEPS,
     base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -503,27 +512,27 @@ def run_baseline_inference(
     Args:
         environment: LogAnomalyEnvironment instance
         difficulty: Difficulty level ("easy", "medium", "hard", or "all")
-        model: Model to use for baseline
+        model: Model to use for baseline (defaults to MODEL_NAME env var)
         num_episodes: Number of episodes per difficulty
         max_steps: Maximum steps per episode
-        base_url: OpenAI-compatible API base URL (empty for auto-detect)
+        base_url: OpenAI-compatible API base URL (defaults to API_BASE_URL env var)
 
     Returns:
         Baseline results dictionary
     """
-    # Check for API key (either HF_TOKEN or OPENAI_API_KEY)
-    api_key = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
-    has_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+    # Use environment variables as defaults
+    model = model or MODEL_NAME
+    base_url = base_url or API_BASE_URL
 
-    if not api_key and not has_base_url:
+    if not API_KEY:
         return {
             "status": "error",
-            "message": "No API key found. Set HF_TOKEN, OPENAI_API_KEY, or use --base-url for local LLMs",
+            "message": "No API key found. Set HF_TOKEN, API_KEY, or OPENAI_API_KEY environment variable.",
             "baseline_scores": {},
         }
 
     # Create agent
-    agent = ReactAgent(model=model, max_steps=max_steps, base_url=base_url or "")
+    agent = ReactAgent(model=model, max_steps=max_steps, base_url=base_url)
 
     # Determine difficulties to test
     if difficulty == "all":
@@ -662,8 +671,8 @@ def main() -> None:
     parser.add_argument(
         "--model",
         "-m",
-        default="Qwen/Qwen3.5-2B",
-        help="Model to use (default: Qwen/Qwen3.5-2B)",
+        default=None,
+        help=f"Model to use (default: MODEL_NAME env var or {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--episodes",
@@ -679,28 +688,34 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-key",
-        help="API key (or set HF_TOKEN/OPENAI_API_KEY env var)",
+        help="API key (or set HF_TOKEN/API_KEY env var)",
     )
     parser.add_argument(
         "--base-url",
-        help="OpenAI-compatible API base URL (e.g., http://localhost:11434/v1 for Ollama)",
+        help="OpenAI-compatible API base URL (or set API_BASE_URL env var)",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=15,
-        help="Maximum steps per episode (default: 15)",
+        default=MAX_STEPS,
+        help=f"Maximum steps per episode (default: {MAX_STEPS})",
     )
 
     args = parser.parse_args()
 
-    # Set API key if provided
+    # Set environment variables if provided via command line
     if args.api_key:
-        os.environ["OPENAI_API_KEY"] = args.api_key
-
-    # Set base URL if provided
+        os.environ["HF_TOKEN"] = args.api_key
     if args.base_url:
-        os.environ["OPENAI_BASE_URL"] = args.base_url
+        os.environ["API_BASE_URL"] = args.base_url
+
+    # Re-read environment variables after potential updates
+    global API_KEY, API_BASE_URL, MODEL_NAME
+    API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+    API_BASE_URL = os.getenv("API_BASE_URL", HF_ROUTER_URL)
+
+    # Use model from args or environment
+    model = args.model or MODEL_NAME
 
     # Import environment
     from server.log_anomaly_environment import LogAnomalyEnvironment
@@ -709,7 +724,8 @@ def main() -> None:
     env = LogAnomalyEnvironment()
 
     # Run baseline
-    print(f"Running baseline with {args.model}")
+    print(f"Running inference with model: {model}")
+    print(f"API Base URL: {API_BASE_URL}")
     print(f"Difficulty: {args.difficulty}")
     print(f"Episodes per difficulty: {args.episodes}")
     print()
@@ -717,14 +733,15 @@ def main() -> None:
     results = run_baseline_inference(
         environment=env,
         difficulty=args.difficulty,
-        model=args.model,
+        model=model,
         num_episodes=args.episodes,
         max_steps=args.max_steps,
+        base_url=API_BASE_URL,
     )
 
     # Print results
     print("\n" + "=" * 50)
-    print("BASELINE RESULTS")
+    print("INFERENCE RESULTS")
     print("=" * 50)
     print(json.dumps(results, indent=2))
 

@@ -9,8 +9,7 @@ tags:
   - openenv
   - log-analysis
   - anomaly-detection
-  - reinforcement-learning
-  - agent-training
+  - real-world-evaluation
 ---
 
 # Log Anomaly Investigation Environment
@@ -48,12 +47,6 @@ pip install -e ".[all]"
 
 # Or with uv
 uv sync
-```
-
-### From PyPI (when available)
-
-```bash
-pip install log-anomaly-env
 ```
 
 ## Quick Start
@@ -198,16 +191,17 @@ Episodes are graded on four components:
 
 Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting (30 episodes):
 
-| Difficulty | Mean Reward | Component | Type | Window | Efficiency |
-|------------|-------------|-----------|------|--------|------------|
-| **Easy**   | 0.713       | 0.90      | 0.90 | 0.49   | 0.60       |
-| **Medium** | 0.230       | 0.50      | 0.20 | 0.09   | 0.16       |
-| **Hard**   | 0.378       | 0.90      | 0.20 | 0.09   | 0.47       |
-| **Overall**| **0.440**   | 0.77      | 0.43 | 0.22   | 0.41       |
+| Difficulty  | Mean Reward | Component | Type | Window | Efficiency |
+| ----------- | ----------- | --------- | ---- | ------ | ---------- |
+| **Easy**    | 0.713       | 0.90      | 0.90 | 0.49   | 0.60       |
+| **Medium**  | 0.230       | 0.50      | 0.20 | 0.09   | 0.16       |
+| **Hard**    | 0.378       | 0.90      | 0.20 | 0.09   | 0.47       |
+| **Overall** | **0.440**   | 0.77      | 0.43 | 0.22   | 0.41       |
 
-*30 episodes (10 per difficulty). Hard tasks (cascade failure) and medium tasks (memory leak, latency degradation, service dropout) remain challenging for small models.*
+_30 episodes (10 per difficulty). Hard tasks (cascade failure) and medium tasks (memory leak, latency degradation, service dropout) remain challenging for small models._
 
 ### Highlights
+
 - **Best episode**: 0.92 reward (easy_8) - near-perfect detection
 - **Easy tasks**: 90% component accuracy, 90% type accuracy
 - **Hard tasks**: 90% component accuracy, but cascade_failure type detection remains difficult (20%)
@@ -217,6 +211,7 @@ Baseline results using `Qwen/Qwen3.5-2B` with ReAct prompting (30 episodes):
 Run the ReAct + Qwen baseline:
 
 ### Option 1: HuggingFace Router (Cloud)
+
 ```bash
 # Set HuggingFace token
 export HF_TOKEN="your-huggingface-token"
@@ -226,6 +221,7 @@ python baseline_inference.py --difficulty all --episodes 5
 ```
 
 ### Option 2: Local LLM with Ollama
+
 ```bash
 # Install and start Ollama
 ollama pull qwen2.5:7b
@@ -238,6 +234,7 @@ python baseline_inference.py \
 ```
 
 ### Option 3: Local LLM with vLLM
+
 ```bash
 # Start vLLM server
 python -m vllm.entrypoints.openai.api_server \
@@ -251,6 +248,7 @@ python baseline_inference.py \
 ```
 
 ### Programmatic Usage
+
 ```python
 from baseline_inference import run_baseline_inference
 
@@ -376,4 +374,4 @@ docker run --gpus all -p 8000:8000 log-anomaly-env:latest
 
 - Built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework
 - Inspired by real-world DevOps/SRE workflows
-- Part of PyTorch OpenEnv AI Hackathon
+- Part of OpenEnv AI Hackathon
