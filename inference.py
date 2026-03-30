@@ -1,27 +1,21 @@
 """
 Inference Script for Log Anomaly Investigation Environment.
 ===================================
-MANDATORY
-- Before submitting, ensure the following variables are defined in your environment configuration:
-    API_BASE_URL   The API endpoint for the LLM.
-    MODEL_NAME     The model identifier to use for inference.
-    HF_TOKEN       Your Hugging Face / API key.
-
-- The inference script must be named `inference.py` and placed in the root directory of the project
-- Participants must use OpenAI Client for all LLM calls using above variables
+MANDATORY ENVIRONMENT VARIABLES (set these before running):
+    API_BASE_URL   The API endpoint for the LLM (default: HuggingFace router)
+    MODEL_NAME     The model identifier to use for inference
+    HF_TOKEN       Your Hugging Face API key
 
 Usage:
-    # Run from command line
-    python inference.py --difficulty easy --episodes 5
+    # Set environment variables
+    export HF_TOKEN="your_token"
+    export MODEL_NAME="Qwen/Qwen3.5-4B"
+
+    # Run inference
+    uv run python inference.py --difficulty easy --episodes 5
 
     # Or import and use programmatically
     from inference import run_baseline_inference, ReactAgent
-
-    results = run_baseline_inference(
-        environment=env,
-        difficulty="all",
-        num_episodes=3,
-    )
 """
 
 import os
@@ -687,14 +681,6 @@ def main() -> None:
         help="Output file for results (JSON)",
     )
     parser.add_argument(
-        "--api-key",
-        help="API key (or set HF_TOKEN/API_KEY env var)",
-    )
-    parser.add_argument(
-        "--base-url",
-        help="OpenAI-compatible API base URL (or set API_BASE_URL env var)",
-    )
-    parser.add_argument(
         "--max-steps",
         type=int,
         default=MAX_STEPS,
@@ -702,17 +688,6 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-
-    # Set environment variables if provided via command line
-    if args.api_key:
-        os.environ["HF_TOKEN"] = args.api_key
-    if args.base_url:
-        os.environ["API_BASE_URL"] = args.base_url
-
-    # Re-read environment variables after potential updates
-    global API_KEY, API_BASE_URL, MODEL_NAME
-    API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
-    API_BASE_URL = os.getenv("API_BASE_URL", HF_ROUTER_URL)
 
     # Use model from args or environment
     model = args.model or MODEL_NAME
