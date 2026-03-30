@@ -377,6 +377,7 @@ class InvestigationEpisode:
                     "error": "repeat_blocked",
                     "repeat_count": repeat_count + 1,
                     "command": command,
+                    "command_history": self.command_history,  # Keep history for DO NOT REPEAT
                 },
             )
 
@@ -404,7 +405,11 @@ class InvestigationEpisode:
                 task_difficulty=self.difficulty.value,
                 done=False,
                 reward=self.episode_reward,
-                metadata={"error": error_msg, "command": command},
+                metadata={
+                    "error": error_msg,
+                    "command": command,
+                    "command_history": self.command_history,  # Keep history for DO NOT REPEAT
+                },
             )
 
         # Execute command

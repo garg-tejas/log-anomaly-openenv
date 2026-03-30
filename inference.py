@@ -143,22 +143,26 @@ class ReactAgent:
             anomaly_hint = (
                 "ANOMALY TYPE: error_spike (this is the ONLY valid type for easy difficulty)"
             )
+            search_hint = "Look for: ERROR, error spike patterns"
         elif difficulty == "hard":
             anomaly_hint = (
                 "ANOMALY TYPE: cascade_failure (this is the ONLY valid type for hard difficulty)"
             )
+            search_hint = "Look for: cascade, dependency, affected by, circuit breaker"
         else:  # medium
             anomaly_hint = (
                 "ANOMALY TYPES: error_spike, memory_leak, latency_degradation, service_dropout"
             )
+            search_hint = "Look for: ERROR, heap/GC/memory (memory_leak), latency/timeout (latency), unavailable/dropout (service_dropout)"
 
         return f"""You are a DevOps engineer investigating log.txt for anomalies.
 
 {anomaly_hint}
+{search_hint}
 
 To run a command, reply with ONLY a bash code block:
 ```bash
-grep ERROR log.txt | head -10
+grep -i error log.txt | head -10
 ```
 
 To submit your answer, reply with ONLY a json code block:
@@ -170,7 +174,8 @@ RULES:
 1. Output exactly ONE code block per response
 2. No text before or after the code block
 3. start_time and end_time MUST be real timestamps copied from grep output (format: 2026-03-27T14:55:00)
-4. Investigate at least 3 commands before submitting"""
+4. Investigate at least 3 commands before submitting
+5. If grep returns empty, try -i flag (case insensitive) or different keywords"""
 
     def _build_thinking_prompt(
         self,
@@ -188,29 +193,42 @@ RULES:
         # Add urgency warning on final steps
         if steps_remaining <= 3 and steps_remaining > 0:
             prompt_parts.append(
-                f"\n⚠️ FINAL {steps_remaining} STEPS - Submit your answer soon or get 0 reward!"
+                f"\n!!! FINAL {steps_remaining} STEPS - Submit your answer NOW or get 0 reward !!!"
             )
 
-        # Show commands already run (DO NOT REPEAT)
+        # Show commands already run (DO NOT REPEAT) - make it prominent
         if observation.command_history:
             unique_commands = list(
                 dict.fromkeys(cmd_entry["command"] for cmd_entry in observation.command_history)
             )
             if unique_commands:
                 prompt_parts.append(
-                    f"\nCommands already run (DO NOT REPEAT): {', '.join(unique_commands[-7:])}"
+                    f"\n*** DO NOT REPEAT THESE COMMANDS (you will be penalized): ***\n{chr(10).join('- ' + c for c in unique_commands[-7:])}"
                 )
 
         # Show recent history with outputs
         if observation.command_history:
             prompt_parts.append("\n=== RECENT OUTPUT ===")
             # Show only last 3 commands with output (more focused)
+            empty_count = 0
             for cmd_entry in observation.command_history[-3:]:
                 prompt_parts.append(f"$ {cmd_entry['command']}")
                 output = cmd_entry["output"]
-                if len(output) > OUTPUT_PREVIEW_SHORT:
+                if not output or not output.strip():
+                    prompt_parts.append("(no output - try different keywords)")
+                    empty_count += 1
+                elif len(output) > OUTPUT_PREVIEW_SHORT:
                     output = output[:OUTPUT_PREVIEW_SHORT] + "\n[truncated]"
-                prompt_parts.append(output)
+                    prompt_parts.append(output)
+                else:
+                    prompt_parts.append(output)
+
+            # If all recent commands returned empty, suggest different approach
+            if empty_count >= 2:
+                prompt_parts.append(
+                    "\n*** Many commands returned empty. Try: grep -i (case insensitive), or check 'head -50 log.txt' for log format ***"
+                )
+
             prompt_parts.append("")
 
         if observation.command_output and not observation.command_history:
