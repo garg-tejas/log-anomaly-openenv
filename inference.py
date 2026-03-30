@@ -26,15 +26,10 @@ from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
-# Load environment variables from .env file if present
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv not installed, use system env vars only
-
+from dotenv import load_dotenv
 from openai import OpenAI
+
+load_dotenv()
 
 from models import (
     InvestigationAction,

@@ -8,13 +8,9 @@ using the OpenEnv spec with WebSocket support.
 import os
 import sys
 
-# Load environment variables from .env file if present
-try:
-    from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-    load_dotenv()
-except ImportError:
-    pass
+load_dotenv()
 
 # Add parent directory to path for imports when running directly
 _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
