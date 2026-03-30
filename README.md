@@ -4,6 +4,7 @@ emoji: "🔍"
 colorFrom: purple
 colorTo: blue
 sdk: docker
+app_port: 8000
 pinned: false
 tags:
   - openenv
@@ -215,9 +216,10 @@ Run the ReAct + Qwen baseline:
 ```bash
 # Set HuggingFace token
 export HF_TOKEN="your-huggingface-token"
+export MODEL_NAME="Qwen/Qwen3.5-4B"  # optional, has default
 
 # Run baseline
-python baseline_inference.py --difficulty all --episodes 5
+uv run python inference.py --difficulty all --episodes 5
 ```
 
 ### Option 2: Local LLM with Ollama
@@ -226,11 +228,12 @@ python baseline_inference.py --difficulty all --episodes 5
 # Install and start Ollama
 ollama pull qwen2.5:7b
 
-# Run baseline with local model
-python baseline_inference.py \
-  --base-url http://localhost:11434/v1 \
-  --model qwen2.5:7b \
-  --difficulty all --episodes 3
+# Set environment variables
+export API_BASE_URL="http://localhost:11434/v1"
+export MODEL_NAME="qwen2.5:7b"
+
+# Run baseline
+uv run python inference.py --difficulty all --episodes 3
 ```
 
 ### Option 3: Local LLM with vLLM
@@ -240,22 +243,23 @@ python baseline_inference.py \
 python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-7B-Instruct --port 8080
 
+# Set environment variables
+export API_BASE_URL="http://localhost:8080/v1"
+export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
+
 # Run baseline
-python baseline_inference.py \
-  --base-url http://localhost:8080/v1 \
-  --model Qwen/Qwen2.5-7B-Instruct \
-  --difficulty all --episodes 3
+uv run python inference.py --difficulty all --episodes 3
 ```
 
 ### Programmatic Usage
 
 ```python
-from baseline_inference import run_baseline_inference
+from inference import run_baseline_inference
 
 results = run_baseline_inference(
     environment=env,
     difficulty="all",
-    model="Qwen/Qwen3.5-2B",
+    model="Qwen/Qwen3.5-4B",
     num_episodes=3,
 )
 ```
@@ -329,7 +333,7 @@ log_anomaly_env/
 ├── client.py             # Client implementation
 ├── log_utils.py          # Log parsing and injection
 ├── grader.py             # Grading system
-├── baseline_inference.py # Baseline script
+├── inference.py          # Baseline inference script
 ├── server/
 │   ├── __init__.py
 │   ├── log_anomaly_environment.py  # Main environment
