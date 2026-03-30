@@ -24,7 +24,6 @@ USER user
 ENV HOME=/home/user \
     PATH=/home/user/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/home/user/app:$PYTHONPATH \
     LOG_LEVEL=INFO
 
 WORKDIR $HOME/app
