@@ -217,6 +217,30 @@ class InvestigationEpisode:
 
         self.step_count += 1
 
+        # Check for timeout (max steps reached without submission)
+        if self.step_count >= self.MAX_STEPS and action.action_type != "submit":
+            # Wipe accumulated rewards - clear negative signal for GRPO
+            wiped_reward = self.episode_reward
+            self.episode_reward = -0.5  # Strong negative final reward
+            self.answer_submitted = True  # Mark as done
+
+            return LogObservation(
+                command_output="TIMEOUT: Investigation incomplete. No answer submitted. You get -0.5 reward.",
+                stderr="Episode ended without submission",
+                exit_code=1,
+                steps_remaining=0,
+                total_steps=self.MAX_STEPS,
+                answer_submitted=True,
+                task_difficulty=self.difficulty.value,
+                done=True,
+                reward=self.episode_reward,
+                metadata={
+                    "timeout": True,
+                    "wiped_reward": wiped_reward,
+                    "steps_used": self.step_count,
+                },
+            )
+
         if action.action_type == "submit":
             return self._handle_submit(action)
         elif action.action_type == "bash":
@@ -333,6 +357,33 @@ class InvestigationEpisode:
 
     def _handle_bash(self, command: str) -> LogObservation:
         """Execute a bash command in the sandbox."""
+        # Check for repeated commands (circuit breaker)
+        repeat_count = sum(1 for h in self.command_history if h["command"] == command)
+
+        if repeat_count >= 2:
+            # Block the command after 2 repeats (3rd attempt blocked)
+            self.episode_reward -= 0.3  # Strong penalty
+            return LogObservation(
+                command_output=f"BLOCKED: You've run this exact command {repeat_count + 1} times. Try a different approach.",
+                stderr="Repeated command blocked",
+                exit_code=1,
+                steps_remaining=self.MAX_STEPS - self.step_count,
+                total_steps=self.MAX_STEPS,
+                answer_submitted=False,
+                task_difficulty=self.difficulty.value,
+                done=False,
+                reward=self.episode_reward,
+                metadata={
+                    "error": "repeat_blocked",
+                    "repeat_count": repeat_count + 1,
+                    "command": command,
+                },
+            )
+
+        # Escalating penalty for first repeat
+        if repeat_count == 1:
+            self.episode_reward -= 0.1
+
         # Validate command
         is_valid, error_msg = self._validate_command(command)
         if not is_valid:

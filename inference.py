@@ -128,6 +128,7 @@ class ReactAgent:
             ],
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 
         content = response.choices[0].message.content
@@ -177,13 +178,34 @@ RULES:
         state: InvestigationState,
     ) -> str:
         """Build the prompt for the current step."""
+        steps_used = observation.total_steps - observation.steps_remaining
+        steps_remaining = observation.steps_remaining
+
         prompt_parts = [
-            f"Steps: {observation.total_steps - observation.steps_remaining}/{observation.total_steps}",
+            f"Step {steps_used}/{observation.total_steps}",
         ]
 
+        # Add urgency warning on final steps
+        if steps_remaining <= 3 and steps_remaining > 0:
+            prompt_parts.append(
+                f"\n⚠️ FINAL {steps_remaining} STEPS - Submit your answer soon or get 0 reward!"
+            )
+
+        # Show commands already run (DO NOT REPEAT)
         if observation.command_history:
-            prompt_parts.append("\n=== HISTORY ===")
-            for cmd_entry in observation.command_history[-5:]:
+            unique_commands = list(
+                dict.fromkeys(cmd_entry["command"] for cmd_entry in observation.command_history)
+            )
+            if unique_commands:
+                prompt_parts.append(
+                    f"\nCommands already run (DO NOT REPEAT): {', '.join(unique_commands[-7:])}"
+                )
+
+        # Show recent history with outputs
+        if observation.command_history:
+            prompt_parts.append("\n=== RECENT OUTPUT ===")
+            # Show only last 3 commands with output (more focused)
+            for cmd_entry in observation.command_history[-3:]:
                 prompt_parts.append(f"$ {cmd_entry['command']}")
                 output = cmd_entry["output"]
                 if len(output) > OUTPUT_PREVIEW_SHORT:
