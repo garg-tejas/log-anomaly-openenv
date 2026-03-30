@@ -18,10 +18,10 @@ if __package__:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
+        REWARD_TIMEOUT,
         REWARD_WRONG_TYPE_PENALTY,
         REWARD_WRONG_COMPONENT_PENALTY,
         REWARD_DECOY_PENALTY,
-        REWARD_PERFECT_BASE,
         REWARD_PERFECT_FAST_BONUS,
         get_difficulty_config,
         get_logger,
@@ -36,10 +36,10 @@ else:
         TYPE_WEIGHT,
         WINDOW_WEIGHT,
         EFFICIENCY_WEIGHT,
+        REWARD_TIMEOUT,
         REWARD_WRONG_TYPE_PENALTY,
         REWARD_WRONG_COMPONENT_PENALTY,
         REWARD_DECOY_PENALTY,
-        REWARD_PERFECT_BASE,
         REWARD_PERFECT_FAST_BONUS,
         get_difficulty_config,
         get_logger,
@@ -55,11 +55,14 @@ class InvestigationGrader:
     Grades agent performance on log anomaly investigation tasks.
 
     The grader evaluates predictions against ground truth using multiple
-    metrics:
-    - Component identification (0.0 - 0.25)
-    - Anomaly type classification (0.0 - 0.25)
-    - Time window precision (0.0 - 0.35)
-    - Investigation efficiency (0.0 - 0.15)
+    metrics with uniform 0.0-1.0 scoring:
+    - Component identification (0.25 weight)
+    - Anomaly type classification (0.25 weight)
+    - Time window precision (0.35 weight)
+    - Investigation efficiency (0.15 weight)
+
+    Difficulty emerges from task complexity (decoys, log size, anomaly types)
+    rather than different reward ranges.
     """
 
     # Reward weights - import from central config
@@ -76,12 +79,13 @@ class InvestigationGrader:
         total_steps: int = 15,
     ) -> EpisodeResult:
         """
-        Grade an episode with expanded reward range (-2.0 to +5.0).
+        Grade an episode with uniform reward range (0.0 to 1.0).
 
         Reward calculation:
         - Base: weighted sum of component, type, window, efficiency scores (0-1)
-        - Penalties: wrong type (-0.5), wrong component (-0.5), decoy match (-0.3)
-        - Bonuses: perfect answer + high efficiency can reach +5.0
+        - Small penalties: wrong type/component (-0.1 each), decoy match (-0.1)
+        - Small bonus: perfect answer + high efficiency (up to +0.2)
+        - All outputs clamped to [0.0, 1.0] range
 
         Args:
             prediction: Agent's submitted answer
@@ -92,13 +96,15 @@ class InvestigationGrader:
         Returns:
             EpisodeResult with detailed scores
         """
+        difficulty = DifficultyLevel(ground_truth.get("difficulty", "easy"))
+
         if prediction is None:
             # No answer submitted
             return EpisodeResult(
                 episode_id=ground_truth.get("episode_id", "unknown"),
                 task_id=ground_truth.get("task_id", "unknown"),
-                difficulty=DifficultyLevel(ground_truth.get("difficulty", "easy")),
-                reward=0.0,
+                difficulty=difficulty,
+                reward=REWARD_TIMEOUT,
                 component_score=0.0,
                 type_score=0.0,
                 window_score=0.0,
@@ -135,7 +141,90 @@ class InvestigationGrader:
         # Check if prediction matches a decoy instead of primary anomaly
         decoy_matched = self._check_decoy_match(prediction, ground_truth)
 
-        # === EXPANDED REWARD CALCULATION ===
+        # === REWARD CALCULATION (0.0 to 1.0) ===
+        # Start with weighted base score
+        base_reward = (
+            component_score * self.COMPONENT_WEIGHT
+            + type_score * self.TYPE_WEIGHT
+            + window_score * self.WINDOW_WEIGHT
+            + efficiency_score * self.EFFICIENCY_WEIGHT
+        )
+
+        # Apply small penalties for wrong answers
+        penalties = 0.0
+        answer_given = (
+            prediction.component
+            or prediction.anomaly_type
+            or prediction.start_time
+            or prediction.end_time
+        )
+        if answer_given and type_score == 0.0:
+            penalties += REWARD_WRONG_TYPE_PENALTY  # -0.1
+        if answer_given and component_score == 0.0:
+            penalties += REWARD_WRONG_COMPONENT_PENALTY  # -0.1
+        if decoy_matched:
+            penalties += REWARD_DECOY_PENALTY  # -0.1
+
+        # Apply small bonus for perfect + fast answers
+        bonus = 0.0
+        is_perfect = (
+            component_score == 1.0
+            and type_score == 1.0
+            and window_score >= 0.8  # Allow some window tolerance
+        )
+        if is_perfect:
+            # Small efficiency bonus (max +0.2)
+            bonus = efficiency_score * REWARD_PERFECT_FAST_BONUS
+
+        # Final reward: base + bonus + penalties
+        total_reward = base_reward + bonus + penalties
+
+        # Clamp to [0.0, 1.0] range
+        total_reward = max(0.0, min(1.0, total_reward))
+
+        return EpisodeResult(
+            episode_id=ground_truth.get("episode_id", "unknown"),
+            task_id=ground_truth.get("task_id", "unknown"),
+            difficulty=difficulty,
+            reward=round(total_reward, 4),
+            component_score=round(component_score, 4),
+            type_score=round(type_score, 4),
+            window_score=round(window_score, 4),
+            efficiency_score=round(efficiency_score, 4),
+            predicted_answer=prediction,
+            ground_truth=ground_truth,
+            steps_used=steps_used,
+            episode_complete=True,
+            decoy_matched=decoy_matched,
+        )
+
+        # Calculate component score
+        component_score = self._grade_component(
+            prediction.component,
+            str(ground_truth.get("component", "")),
+        )
+
+        # Calculate type score
+        type_score = self._grade_type(
+            prediction.anomaly_type,
+            AnomalyType(ground_truth.get("anomaly_type", "error_spike")),
+        )
+
+        # Calculate window score
+        window_score = self._grade_window(
+            prediction.start_time,
+            prediction.end_time,
+            str(ground_truth.get("start_time", "")),
+            str(ground_truth.get("end_time", "")),
+        )
+
+        # Calculate efficiency score
+        efficiency_score = self._grade_efficiency(steps_used, total_steps)
+
+        # Check if prediction matches a decoy instead of primary anomaly
+        decoy_matched = self._check_decoy_match(prediction, ground_truth)
+
+        # === GRADUATED REWARD CALCULATION ===
         # Start with weighted base score (0-1 range)
         base_reward = (
             component_score * self.COMPONENT_WEIGHT
@@ -144,14 +233,20 @@ class InvestigationGrader:
             + efficiency_score * self.EFFICIENCY_WEIGHT
         )
 
-        # Apply penalties for wrong answers
+        # Apply penalties for wrong answers (using difficulty-specific penalties)
         penalties = 0.0
-        if type_score == 0.0:
-            penalties += REWARD_WRONG_TYPE_PENALTY  # -0.5
-        if component_score == 0.0:
-            penalties += REWARD_WRONG_COMPONENT_PENALTY  # -0.5
+        answer_given = (
+            prediction.component
+            or prediction.anomaly_type
+            or prediction.start_time
+            or prediction.end_time
+        )
+        if answer_given and type_score == 0.0:
+            penalties += reward_config.wrong_type_penalty
+        if answer_given and component_score == 0.0:
+            penalties += reward_config.wrong_component_penalty
         if decoy_matched:
-            penalties += REWARD_DECOY_PENALTY  # -0.3
+            penalties += reward_config.decoy_penalty
 
         # Apply bonus for perfect + fast answers
         bonus = 0.0
@@ -161,18 +256,20 @@ class InvestigationGrader:
             and window_score >= 0.8  # Allow some window tolerance
         )
         if is_perfect:
-            # Scale bonus by efficiency (0 to REWARD_PERFECT_FAST_BONUS)
+            # Scale bonus by efficiency using difficulty-specific multiplier
             # Perfect efficiency (1.0) = full bonus, low efficiency (0.0) = no bonus
-            bonus = efficiency_score * REWARD_PERFECT_FAST_BONUS
+            bonus = efficiency_score * reward_config.efficiency_bonus_multiplier
 
         # Final reward: base + bonus + penalties
-        # Range: -1.0 (both wrong) to +5.0 (perfect + fast)
         total_reward = base_reward + bonus + penalties
+
+        # Clamp to difficulty-specific range
+        total_reward = max(reward_config.min_reward, min(reward_config.max_reward, total_reward))
 
         return EpisodeResult(
             episode_id=ground_truth.get("episode_id", "unknown"),
             task_id=ground_truth.get("task_id", "unknown"),
-            difficulty=DifficultyLevel(ground_truth.get("difficulty", "easy")),
+            difficulty=difficulty,
             reward=round(total_reward, 4),
             component_score=round(component_score, 4),
             type_score=round(type_score, 4),

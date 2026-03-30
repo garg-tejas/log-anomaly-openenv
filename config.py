@@ -100,10 +100,13 @@ def parse_timestamp_strict(ts: str) -> datetime:
 # =============================================================================
 
 # Maximum steps allowed per episode
-MAX_STEPS = int(os.getenv("LOG_ANOMALY_MAX_STEPS", "15"))
+# Increased from 15 to 20 to give models time to complete investigations
+# (Most episodes were hitting 15-step timeout without submitting)
+MAX_STEPS = int(os.getenv("LOG_ANOMALY_MAX_STEPS", "20"))
 
 # Truncate command output to this many characters
-OUTPUT_TRUNCATION = int(os.getenv("LOG_ANOMALY_OUTPUT_TRUNCATION", "4000"))
+# Increased to allow fuller log viewing (models have large context windows)
+OUTPUT_TRUNCATION = int(os.getenv("LOG_ANOMALY_OUTPUT_TRUNCATION", "32000"))
 
 # Command execution timeout in seconds
 COMMAND_TIMEOUT = int(os.getenv("LOG_ANOMALY_COMMAND_TIMEOUT", "10"))
@@ -122,17 +125,19 @@ WINDOW_WEIGHT = 0.35  # Weight for accurate time window
 EFFICIENCY_WEIGHT = 0.15  # Weight for step efficiency
 
 # =============================================================================
-# Expanded Reward Range Configuration (Winner-Inspired)
+# Reward Configuration (0.0 to 1.0 range for all difficulties)
 # =============================================================================
-# Reward range: -2.0 to +5.0 (inspired by Kube SRE Gym winner)
-# This provides stronger learning signals for GRPO/RL training
+# Simple, uniform reward function across all difficulties.
+# Difficulty emerges naturally from:
+# - Task complexity (log size, anomaly types)
+# - Hidden state (decoys in medium/hard modes)
+# - Cascade failures (hard mode only)
 
-REWARD_TIMEOUT = -2.0  # No submission before max steps
-REWARD_WRONG_TYPE_PENALTY = -0.5  # Penalty for incorrect anomaly type
-REWARD_WRONG_COMPONENT_PENALTY = -0.5  # Penalty for incorrect component
-REWARD_DECOY_PENALTY = -0.3  # Penalty for identifying decoy as primary anomaly
-REWARD_PERFECT_BASE = 1.0  # Base reward for correct answer
-REWARD_PERFECT_FAST_BONUS = 4.0  # Bonus for perfect + fast (total up to 5.0)
+REWARD_TIMEOUT = 0.0  # No submission before max steps
+REWARD_WRONG_TYPE_PENALTY = -0.1  # Small penalty for incorrect anomaly type
+REWARD_WRONG_COMPONENT_PENALTY = -0.1  # Small penalty for incorrect component
+REWARD_DECOY_PENALTY = -0.1  # Penalty for identifying decoy as primary anomaly
+REWARD_PERFECT_FAST_BONUS = 0.2  # Bonus for perfect + fast answer
 REWARD_REPEAT_COMMAND_PENALTY = -0.3  # Penalty for repeating same command (blocked)
 REWARD_REPEAT_WARNING_PENALTY = -0.1  # Warning penalty for first repeat
 
@@ -202,19 +207,23 @@ DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 HF_ROUTER_URL = "https://router.huggingface.co/v1"
 
 # LLM generation parameters
+# Optimized for Qwen3.5 native thinking mode (recommended by Qwen team)
 LLM_TEMPERATURE = float(os.getenv("LOG_ANOMALY_LLM_TEMPERATURE", "0.7"))
-LLM_MAX_TOKENS = int(os.getenv("LOG_ANOMALY_LLM_MAX_TOKENS", "500"))
+LLM_MAX_TOKENS = int(os.getenv("LOG_ANOMALY_LLM_MAX_TOKENS", "8192"))
+LLM_TOP_P = float(os.getenv("LOG_ANOMALY_LLM_TOP_P", "0.95"))
+LLM_PRESENCE_PENALTY = float(os.getenv("LOG_ANOMALY_LLM_PRESENCE_PENALTY", "1.5"))
 
-# Output preview lengths for prompts (to avoid context overflow)
-OUTPUT_PREVIEW_SHORT = 400  # Short preview for recent command output
-OUTPUT_PREVIEW_LONG = 800  # Longer preview for full context
-
+# Output preview lengths for prompts
+# Increased significantly since modern LLMs have large context windows (262K for Qwen3.5)
+OUTPUT_PREVIEW_SHORT = 8192  # Recent command output preview
+OUTPUT_PREVIEW_LONG = 16384  # Full context preview
 
 # =============================================================================
 # Command History Configuration
 # =============================================================================
 
-MAX_COMMAND_HISTORY = 10  # Maximum number of commands to keep in history for reward shaping
+# Maximum number of commands to keep in history
+MAX_COMMAND_HISTORY = 25
 
 
 # =============================================================================

@@ -224,7 +224,7 @@ class InvestigationEpisode:
         if self.step_count >= self.MAX_STEPS and action.action_type != "submit":
             # Wipe accumulated rewards - clear negative signal for GRPO
             wiped_reward = self.episode_reward
-            self.episode_reward = REWARD_TIMEOUT  # Strong negative final reward (-2.0)
+            self.episode_reward = REWARD_TIMEOUT  # Timeout penalty (0.0)
             self.answer_submitted = True  # Mark as done
 
             return LogObservation(
@@ -358,10 +358,51 @@ class InvestigationEpisode:
             metadata=metadata,
         )
 
+    def _normalize_command(self, command: str) -> str:
+        """
+        Normalize command for duplicate detection.
+
+        Treats functionally identical commands as the same:
+        - 'cat log.txt | head -50' → 'head -50 log.txt'
+        - 'cat log.txt | head' → 'head log.txt'
+        - Strips extra whitespace
+
+        Args:
+            command: Raw command string
+
+        Returns:
+            Normalized command string
+        """
+        # Strip whitespace
+        cmd = command.strip()
+
+        # Normalize 'cat file | head' patterns
+        import re
+
+        cat_pipe_pattern = r"cat\s+(\S+)\s*\|\s*(head|tail|grep|awk|sed)(.*)$"
+        match = re.match(cat_pipe_pattern, cmd)
+        if match:
+            file_path = match.group(1)
+            next_cmd = match.group(2)
+            args = match.group(3).strip()
+            # Rewrite as: next_cmd args file_path
+            cmd = f"{next_cmd} {args} {file_path}".strip()
+            # Clean up multiple spaces
+            cmd = re.sub(r"\s+", " ", cmd)
+
+        return cmd
+
     def _handle_bash(self, command: str) -> LogObservation:
         """Execute a bash command in the sandbox."""
+        # Normalize command for duplicate detection
+        normalized_cmd = self._normalize_command(command)
+
         # Check for repeated commands (circuit breaker)
-        repeat_count = sum(1 for h in self.command_history if h["command"] == command)
+        repeat_count = sum(
+            1
+            for h in self.command_history
+            if self._normalize_command(h["command"]) == normalized_cmd
+        )
 
         if repeat_count >= 2:
             # Block the command after 2 repeats (3rd attempt blocked)
