@@ -35,8 +35,6 @@ from config import (
     ALLOWED_COMMANDS,
     MAX_COMMAND_HISTORY,
     REWARD_TIMEOUT,
-    REWARD_REPEAT_COMMAND_PENALTY,
-    REWARD_REPEAT_WARNING_PENALTY,
     get_difficulty_config,
     get_logger,
     parse_timestamp,
@@ -214,7 +212,7 @@ class InvestigationEpisode:
                 answer_submitted=True,
                 task_difficulty=self.difficulty.value,
                 done=True,
-                reward=self.episode_reward,
+                reward=self.episode_reward,  # Final reward already set
                 metadata={"status": "episode_complete"},
             )
 
@@ -222,13 +220,11 @@ class InvestigationEpisode:
 
         # Check for timeout (max steps reached without submission)
         if self.step_count >= self.MAX_STEPS and action.action_type != "submit":
-            # Wipe accumulated rewards - clear negative signal for GRPO
-            wiped_reward = self.episode_reward
             self.episode_reward = REWARD_TIMEOUT  # Timeout penalty (0.0)
             self.answer_submitted = True  # Mark as done
 
             return LogObservation(
-                command_output=f"TIMEOUT: Investigation incomplete. No answer submitted. You get {REWARD_TIMEOUT} reward.",
+                command_output=f"TIMEOUT: Investigation incomplete. No answer submitted. Reward: {REWARD_TIMEOUT}",
                 stderr="Episode ended without submission",
                 exit_code=1,
                 steps_remaining=0,
@@ -236,10 +232,9 @@ class InvestigationEpisode:
                 answer_submitted=True,
                 task_difficulty=self.difficulty.value,
                 done=True,
-                reward=self.episode_reward,
+                reward=REWARD_TIMEOUT,  # 0.0 for timeout (within 0-1 range)
                 metadata={
                     "timeout": True,
-                    "wiped_reward": wiped_reward,
                     "steps_used": self.step_count,
                 },
             )
@@ -258,7 +253,7 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=self.episode_reward,
+                reward=0.0,  # No intermediate rewards
                 metadata={"error": "invalid_action_type"},
             )
 
@@ -274,7 +269,7 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=self.episode_reward,
+                reward=0.0,  # No intermediate rewards
                 metadata={"error": "missing_fields"},
             )
 
@@ -301,7 +296,7 @@ class InvestigationEpisode:
                 answer_submitted=True,
                 task_difficulty=self.difficulty.value,
                 done=True,
-                reward=0.0,
+                reward=REWARD_TIMEOUT,  # 0.0 for invalid submission (within 0-1 range)
                 metadata={"error": "invalid_anomaly_type"},
             )
 
@@ -406,7 +401,7 @@ class InvestigationEpisode:
 
         if repeat_count >= 2:
             # Block the command after 2 repeats (3rd attempt blocked)
-            self.episode_reward += REWARD_REPEAT_COMMAND_PENALTY  # Strong penalty (-0.3)
+            # No penalty to episode_reward - only final graded reward matters
             return LogObservation(
                 command_output=f"BLOCKED: You've run this exact command {repeat_count + 1} times. Try a different approach.",
                 stderr="Repeated command blocked",
@@ -416,7 +411,7 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=self.episode_reward,
+                reward=0.0,  # No intermediate rewards
                 metadata={
                     "error": "repeat_blocked",
                     "repeat_count": repeat_count + 1,
@@ -425,9 +420,7 @@ class InvestigationEpisode:
                 },
             )
 
-        # Escalating penalty for first repeat
-        if repeat_count == 1:
-            self.episode_reward += REWARD_REPEAT_WARNING_PENALTY  # Warning penalty (-0.1)
+        # No penalty for first repeat - let grader handle efficiency scoring
 
         # Validate command
         is_valid, error_msg = self._validate_command(command)
@@ -448,7 +441,7 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=self.episode_reward,
+                reward=0.0,  # No intermediate rewards
                 metadata={
                     "error": error_msg,
                     "command": command,
@@ -471,9 +464,8 @@ class InvestigationEpisode:
         if len(self.command_history) > MAX_COMMAND_HISTORY:
             self.command_history = self.command_history[-MAX_COMMAND_HISTORY:]
 
-        # Compute intermediate reward
-        intermediate_reward = self._compute_intermediate_reward(stdout, stderr)
-        self.episode_reward += intermediate_reward
+        # No intermediate rewards - only final graded reward matters (0.0-1.0 range)
+        # This ensures all episode rewards stay in the required 0.0-1.0 range
 
         return LogObservation(
             command_output=stdout,
@@ -484,11 +476,10 @@ class InvestigationEpisode:
             answer_submitted=False,
             task_difficulty=self.difficulty.value,
             done=False,
-            reward=self.episode_reward,
+            reward=0.0,  # No reward until final submission
             metadata={
                 "command": command,
                 "output_truncated": len(stdout) >= self.OUTPUT_TRUNCATION,
-                "intermediate_reward": intermediate_reward,
                 "command_history": self.command_history,  # Full history for prompt building
             },
         )
