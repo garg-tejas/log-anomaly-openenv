@@ -903,8 +903,9 @@ class LogAnomalyEnvironment(Environment):
         Returns:
             Observation after the step
         """
+        # Auto-reset if environment not initialized (supports stateless HTTP mode)
         if self.episode is None:
-            raise RuntimeError("Environment not reset. Call reset() first.")
+            self.reset(**kwargs)
 
         # Handle legacy InvestigationAction format
         if isinstance(action, InvestigationAction):
