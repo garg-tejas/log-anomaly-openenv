@@ -157,3 +157,66 @@ config:
     - cut
     - find
     - ls
+
+# =============================================================================
+# Training Configuration (TRL/GRPO Support)
+# =============================================================================
+training:
+  # TRL Integration
+  trl_compatible: true
+  supports_grpo: true
+
+  # Environment factories for different training modes
+  environment_factory: "training_client.LogAnomalyTrainingEnv"
+  curriculum_factory: "training_client.CurriculumLogAnomalyEnv"
+
+  # Server concurrency for parallel GRPO generations
+  supports_concurrent_sessions: true
+  max_concurrent_envs: 64
+
+  # Reward characteristics (useful for RL algorithm selection)
+  reward_range: [0.0, 1.0]
+  reward_type: "dense"  # dense (multi-component) vs sparse (binary)
+  episode_length: "variable"  # variable (1-20 steps) vs fixed
+
+  # Curriculum learning settings
+  curriculum:
+    enabled: true
+    warmup_episodes: 20
+    success_threshold: 0.5
+    difficulty_progression:
+      - name: easy
+        success_rate_min: 0.0
+      - name: medium
+        success_rate_min: 0.4
+      - name: hard
+        success_rate_min: 0.7
+
+  # Recommended training configuration
+  recommended_config:
+    model: "Qwen/Qwen3-4B"
+    num_generations: 4
+    gradient_accumulation_steps: 16
+    learning_rate: 1e-6
+    max_completion_length: 4096
+
+  # Tool schema (for TRL tool discovery)
+  tools:
+    - name: bash
+      description: "Execute a bash command to investigate log.txt"
+      parameters:
+        command:
+          type: string
+          description: "The bash command to execute"
+    - name: submit
+      description: "Submit your final answer about the detected anomaly"
+      parameters:
+        anomaly_type:
+          type: string
+          enum: [error_spike, memory_leak, latency_degradation, service_dropout, cascade_failure]
+        component:
+          type: string
+        start_time:
+          type: string
+        end_time:
+          type: string

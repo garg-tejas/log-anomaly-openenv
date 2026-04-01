@@ -1,7 +1,10 @@
 __pycache__/
 .ruff_cache/
 .venv/
-data/
+data/loghub/
+data/*.json
+!data/*_sample.log
+!data/README.md
 *.env
 !env.example
 vllm_server.log
@@ -11,3 +14,6 @@ outputs/
 
 *.md
 !README.md
+
+# Local config
+opencode.json

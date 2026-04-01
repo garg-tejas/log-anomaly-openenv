@@ -265,6 +265,107 @@ results = run_baseline_inference(
 )
 ```
 
+## Training with TRL/GRPO
+
+This environment supports reinforcement learning training with TRL's GRPOTrainer.
+Train your own log investigation agent using Group Relative Policy Optimization.
+
+### Training Installation
+
+```bash
+# Install training dependencies
+pip install -e ".[training]"
+
+# Or with vLLM for faster inference
+pip install -e ".[training-vllm]"
+```
+
+### Quick Start Training
+
+```bash
+# Basic training with curriculum learning (recommended)
+python train_grpo.py --model Qwen/Qwen3-4B --curriculum
+
+# Quick test with small model
+python train_grpo.py --model Qwen/Qwen3-0.6B --num-samples 20 --no-vllm
+
+# Train on specific difficulty
+python train_grpo.py --model Qwen/Qwen3-4B --difficulty easy --num-samples 100
+```
+
+### Curriculum Learning
+
+The environment supports progressive difficulty training:
+
+| Phase       | Episodes | Success Rate | Difficulty |
+| ----------- | -------- | ------------ | ---------- |
+| Warmup      | 0-20     | -            | Easy       |
+| Learning    | 20+      | < 40%        | Easy       |
+| Progression | 20+      | 40-70%       | Medium     |
+| Advanced    | 20+      | > 70%        | Hard       |
+
+Enable with `--curriculum` flag or use `CurriculumLogAnomalyEnv` directly.
+
+### vLLM Integration
+
+For faster training, use vLLM in colocate or server mode:
+
+```bash
+# Colocate mode (single GPU, recommended for getting started)
+python train_grpo.py --model Qwen/Qwen3-4B --vllm-mode colocate
+
+# Server mode (multi-GPU setup)
+# Terminal 1: Start vLLM server
+CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen3-4B --port 8000
+# Terminal 2: Run training
+CUDA_VISIBLE_DEVICES=1 python train_grpo.py --vllm-mode server --vllm-server-url http://localhost:8000
+```
+
+### Custom Training Scripts
+
+Use the environment factory directly in your training code:
+
+```python
+from training_client import LogAnomalyTrainingEnv, CurriculumLogAnomalyEnv
+from training_prompts import create_training_dataset_dict
+from trl import GRPOTrainer, GRPOConfig
+from datasets import Dataset
+
+# Create dataset
+data = create_training_dataset_dict(num_easy=100, num_medium=100, num_hard=100)
+dataset = Dataset.from_dict(data)
+
+# Define reward function
+def reward_func(environments, **kwargs):
+    return [env.reward for env in environments]
+
+# Create trainer
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-4B",
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+    environment_factory=CurriculumLogAnomalyEnv,  # or LogAnomalyTrainingEnv
+    args=GRPOConfig(
+        output_dir="./outputs",
+        num_generations=4,
+        max_completion_length=4096,
+    ),
+)
+
+trainer.train()
+```
+
+### Training Environment API
+
+The training environment exposes two tool methods for TRL:
+
+| Method                                                 | Description                       |
+| ------------------------------------------------------ | --------------------------------- |
+| `bash(command)`                                        | Execute bash command on log.txt   |
+| `submit(anomaly_type, component, start_time, end_time)` | Submit final answer               |
+
+After each episode, read `env.reward` (0.0-1.0) for the grading result.
+
 ## API Reference
 
 ### Endpoints

@@ -3,6 +3,9 @@ FastAPI Application for Log Anomaly Investigation Environment.
 
 This module creates an HTTP server that exposes the LogAnomalyEnvironment
 using the OpenEnv spec with WebSocket support.
+
+For GRPO training with TRL, this server supports concurrent sessions
+to handle parallel generation batches.
 """
 
 import os
@@ -22,14 +25,43 @@ from server.log_anomaly_environment import LogAnomalyEnvironment
 from models import LogAction, LogObservation
 
 
-# Create the app using OpenEnv's create_app (adds WebSocket /ws endpoint)
-# create_app expects a factory function, not a class
+# =============================================================================
+# Server Configuration
+# =============================================================================
+
+# Enable concurrent sessions for GRPO training
+# TRL's GRPOTrainer opens N WebSocket connections (one per generation)
+# This should be >= gradient_accumulation_steps * per_device_batch_size
+SUPPORTS_CONCURRENT_SESSIONS: bool = True
+MAX_CONCURRENT_ENVS: int = int(os.getenv("LOG_ANOMALY_MAX_CONCURRENT_ENVS", "64"))
+
+
+# =============================================================================
+# Environment Factory
+# =============================================================================
+
+
 def create_environment() -> LogAnomalyEnvironment:
-    """Factory function to create environment instances."""
+    """
+    Factory function to create environment instances.
+
+    This is called by OpenEnv for each new session/connection.
+    """
     return LogAnomalyEnvironment()
 
 
-app = create_app(create_environment, LogAction, LogObservation, env_name="log_anomaly_env")
+# =============================================================================
+# Application Setup
+# =============================================================================
+
+# Create the app using OpenEnv's create_app (adds WebSocket /ws endpoint)
+app = create_app(
+    create_environment,
+    LogAction,
+    LogObservation,
+    env_name="log_anomaly_env",
+    max_concurrent_envs=MAX_CONCURRENT_ENVS,
+)
 
 
 def main() -> None:
