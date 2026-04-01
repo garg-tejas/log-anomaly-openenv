@@ -84,7 +84,6 @@ def main():
         "venv",
         "venv/*",
         "outputs/*",
-        "*.log",
         ".mypy_cache",
         ".mypy_cache/*",
         ".pytest_cache",
