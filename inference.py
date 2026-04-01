@@ -17,6 +17,7 @@ Usage:
     python inference.py --difficulty all --episodes 2
 """
 
+import asyncio
 import json
 import argparse
 import re
@@ -33,10 +34,6 @@ load_dotenv()
 from models import (
     LogAction,
     DifficultyLevel,
-    AnomalyType,
-    InvestigationAction,
-    BashCommand,
-    SubmitAnswer,
 )
 from config import (
     MAX_STEPS,
@@ -345,11 +342,11 @@ def _guess_submit(command_history: List[Dict[str, Any]], difficulty: str) -> Log
 
 
 # =============================================================================
-# Main Episode Runner
+# Main Episode Runner (async to match OpenEnv pattern)
 # =============================================================================
 
 
-def run_episode(
+async def run_episode(
     env,
     agent: ReactAgent,
     task_name: str,
@@ -373,10 +370,11 @@ def run_episode(
     log_start(task=task_name, env=BENCHMARK, model=model_name)
 
     try:
-        # Reset environment
+        # Reset environment (async)
         seed = BASELINE_SEED + episode_num
-        obs = env.reset(difficulty=difficulty, seed=seed)
-        done = False
+        result = await env.reset(difficulty=difficulty, seed=seed)
+        obs = result.observation
+        done = result.done
 
         for step in range(1, agent.max_steps + 1):
             if done or obs.answer_submitted:
@@ -384,7 +382,7 @@ def run_episode(
 
             is_last = step == agent.max_steps
 
-            # Get action
+            # Get action (LLM call is sync as required by hackathon)
             if is_last and not obs.answer_submitted:
                 action = _guess_submit(command_history, difficulty)
             else:
@@ -406,31 +404,19 @@ def run_episode(
                     ]
                     action = LogAction(action_type="bash", command=fallback_cmds[min(step - 1, 2)])
 
-            # Convert to environment action
+            # Build action string for logging
             if action.action_type == "bash":
-                inv_action = InvestigationAction(
-                    action_type="bash",
-                    bash_command=BashCommand(command=action.command or ""),
-                )
                 action_str = f"bash({action.command})"
             else:
-                inv_action = InvestigationAction(
-                    action_type="submit",
-                    answer=SubmitAnswer(
-                        anomaly_type=AnomalyType(action.anomaly_type or "error_spike"),
-                        component=action.component or "unknown",
-                        start_time=action.start_time or "",
-                        end_time=action.end_time or "",
-                    ),
-                )
                 action_str = f"submit({action.anomaly_type},{action.component})"
 
-            # Execute
-            obs = env.step(inv_action)
-            done = obs.answer_submitted or obs.steps_remaining <= 0
+            # Execute action (async)
+            result = await env.step(action)
+            obs = result.observation
+            done = result.done or obs.answer_submitted or obs.steps_remaining <= 0
 
             # Get reward (clamp to 0-1)
-            reward = min(max(obs.reward or 0.0, 0.0), 1.0)
+            reward = min(max(result.reward or 0.0, 0.0), 1.0)
             rewards.append(reward)
             steps_taken = step
 
@@ -475,8 +461,8 @@ def run_episode(
     return score, steps_taken, rewards
 
 
-def main() -> None:
-    """Main entry point."""
+async def main() -> None:
+    """Main entry point (async)."""
     parser = argparse.ArgumentParser(description="Log Anomaly Investigation Inference")
     parser.add_argument(
         "--difficulty",
@@ -502,10 +488,11 @@ def main() -> None:
     args = parser.parse_args()
     model = args.model or MODEL_NAME
 
-    # Import environment
+    # Import environment and wrapper
     from server.log_anomaly_environment import LogAnomalyEnvironment
+    from client import LocalEnvWrapper
 
-    env = LogAnomalyEnvironment()
+    env = LocalEnvWrapper(LogAnomalyEnvironment())
 
     # Create agent
     agent = ReactAgent(model=model, max_steps=MAX_STEPS, base_url=API_BASE_URL)
@@ -519,27 +506,35 @@ def main() -> None:
     # Run episodes
     all_scores: List[float] = []
 
-    for difficulty in difficulties:
-        for ep_num in range(args.episodes):
-            task_name = f"{difficulty}_{ep_num + 1}"
-            score, steps, rewards = run_episode(
-                env=env,
-                agent=agent,
-                task_name=task_name,
-                difficulty=difficulty,
-                episode_num=ep_num,
-                model_name=model,
-            )
-            all_scores.append(score)
+    try:
+        async with env:
+            for difficulty in difficulties:
+                for ep_num in range(args.episodes):
+                    task_name = f"{difficulty}_{ep_num + 1}"
+                    score, steps, rewards = await run_episode(
+                        env=env,
+                        agent=agent,
+                        task_name=task_name,
+                        difficulty=difficulty,
+                        episode_num=ep_num,
+                        model_name=model,
+                    )
+                    all_scores.append(score)
+    finally:
+        try:
+            await env.close()
+        except Exception as e:
+            print(f"[DEBUG] env.close() error: {e}", flush=True)
 
     # Print summary (separate from structured logs)
-    print("\n" + "=" * 50, flush=True)
-    print("SUMMARY", flush=True)
-    print("=" * 50, flush=True)
-    print(f"Total episodes: {len(all_scores)}", flush=True)
-    print(f"Mean score: {sum(all_scores) / len(all_scores):.3f}", flush=True)
-    print("=" * 50, flush=True)
+    if all_scores:
+        print("\n" + "=" * 50, flush=True)
+        print("SUMMARY", flush=True)
+        print("=" * 50, flush=True)
+        print(f"Total episodes: {len(all_scores)}", flush=True)
+        print(f"Mean score: {sum(all_scores) / len(all_scores):.3f}", flush=True)
+        print("=" * 50, flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
