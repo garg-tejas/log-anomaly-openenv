@@ -664,6 +664,10 @@ class LogAnomalyEnvironment(Environment):
     - EVAL: Limited feedback for fair agent evaluation
     """
 
+    # Mark as supporting concurrent sessions for GRPO training
+    # Each session gets its own isolated episode state
+    SUPPORTS_CONCURRENT_SESSIONS = True
+
     def __init__(self):
         """Initialize the environment."""
         self.episode: Optional[InvestigationEpisode] = None
