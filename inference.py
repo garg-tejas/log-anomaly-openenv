@@ -7,43 +7,39 @@ MANDATORY ENVIRONMENT VARIABLES (set these before running):
     HF_TOKEN       Your Hugging Face API key
 
 Usage:
-    # Run against HuggingFace Space (default)
-    uv run python inference.py --difficulty easy --episodes 3
+    # Run baseline (uses local environment by default)
+    python inference.py --difficulty all --episodes 2
 
-    # Run against local server
-    uv run python inference.py --local --difficulty easy --episodes 1
-
-    # Run against custom URL
-    uv run python inference.py --url http://localhost:8000 --difficulty all --episodes 3
+    # Run with specific model
+    python inference.py --model Qwen/Qwen3-4B --difficulty easy --episodes 2
 
     # Save verbose output to JSON
-    uv run python inference.py -d all -e 3 -o results.json
+    python inference.py -d all -e 2 -o results.json
 """
 
-import asyncio
 import json
 import argparse
-import logging
 import re
-import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+from openai import OpenAI
 from dotenv import load_dotenv
-from tqdm.asyncio import tqdm
+from tqdm import tqdm
 import os
 
 load_dotenv()
 
 from models import (
     LogAction,
-    LogObservation,
     DifficultyLevel,
     AnomalyType,
     EpisodeResult,
+    InvestigationAction,
+    BashCommand,
+    SubmitAnswer,
 )
 from grader import calculate_summary_stats
 from config import (
@@ -51,15 +47,10 @@ from config import (
     MIN_STEPS_BEFORE_SUBMIT,
     DEFAULT_MODEL,
     HF_ROUTER_URL,
-    LLM_TEMPERATURE,
-    LLM_MAX_TOKENS,
-    LLM_TOP_P,
-    LLM_PRESENCE_PENALTY,
     OUTPUT_PREVIEW_SHORT,
     OUTPUT_PREVIEW_LONG,
     get_logger,
 )
-from client import LogAnomalyEnvClient, LocalEnvWrapper, DEFAULT_ENV_URL
 
 # Set up logging
 logger = get_logger(__name__)
@@ -71,6 +62,10 @@ logger = get_logger(__name__)
 API_BASE_URL = os.getenv("API_BASE_URL", HF_ROUTER_URL)
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", DEFAULT_MODEL)
+
+# Reproducibility settings
+BASELINE_TEMPERATURE = 0.1  # Low temperature for reproducible baseline
+BASELINE_SEED = 42  # Fixed seed for reproducibility
 
 
 @dataclass
@@ -123,36 +118,26 @@ class ReactAgent:
     model: str = MODEL_NAME
     max_steps: int = MAX_STEPS
     base_url: str = API_BASE_URL
-    _http_client: Optional[httpx.AsyncClient] = field(default=None, init=False)
+    temperature: float = BASELINE_TEMPERATURE
+    _client: Optional[OpenAI] = field(default=None, init=False)
     _api_model: str = field(init=False)
 
     def __post_init__(self) -> None:
-        """Initialize the API model name."""
+        """Initialize the OpenAI client and API model name."""
+        # Initialize OpenAI client
+        self._client = OpenAI(
+            base_url=self.base_url,
+            api_key=API_KEY,
+            timeout=120.0,
+        )
+
         # For HuggingFace router, append :novita suffix
         if "huggingface" in self.base_url.lower():
             self._api_model = f"{self.model}:novita" if ":novita" not in self.model else self.model
         else:
             self._api_model = self.model
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the async HTTP client."""
-        if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(
-                base_url=self.base_url,
-                timeout=httpx.Timeout(120.0, connect=30.0),
-                headers={
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json",
-                },
-            )
-        return self._http_client
-
-    async def close(self):
-        """Close the HTTP client."""
-        if self._http_client and not self._http_client.is_closed:
-            await self._http_client.aclose()
-
-    async def think(
+    def think(
         self,
         command_output: str,
         command_history: List[Dict[str, Any]],
@@ -177,33 +162,24 @@ class ReactAgent:
             command_output, command_history, steps_remaining, total_steps
         )
 
-        client = await self._get_client()
-
-        response = await client.post(
-            "/chat/completions",
-            json={
-                "model": self._api_model,
-                "messages": [
+        try:
+            completion = self._client.chat.completions.create(
+                model=self._api_model,
+                messages=[
                     {"role": "system", "content": self._get_system_prompt(difficulty)},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": LLM_TEMPERATURE,
-                "max_tokens": LLM_MAX_TOKENS,
-                "top_p": LLM_TOP_P,
-                "presence_penalty": LLM_PRESENCE_PENALTY,
-                "extra_body": {
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "top_k": 20,
-                },
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-        content = data["choices"][0]["message"]["content"]
-        if content is None:
-            return "Error: No response from model"
-        return content
+                temperature=self.temperature,
+                max_tokens=4096,
+                seed=BASELINE_SEED,  # For reproducibility
+            )
+            content = completion.choices[0].message.content
+            if content is None:
+                return "Error: No response from model"
+            return content
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            return f"Error: {e}"
 
     def _get_system_prompt(self, difficulty: str = "easy") -> str:
         """Get the system prompt for the agent."""
@@ -495,11 +471,18 @@ def _find_error_time_window(timestamps: List[str]) -> Tuple[str, str]:
     return (sorted_ts[start_idx], sorted_ts[end_idx])
 
 
-def _guess_submit_answer(command_history: List[Dict[str, Any]]) -> LogAction:
+def _guess_submit_answer(command_history: List[Dict[str, Any]], difficulty: str) -> LogAction:
     """Build a best-effort submission from command history."""
     combined_output = "\n".join(str(entry.get("output", "")) for entry in command_history)
 
-    anomaly_type = _detect_anomaly_type(combined_output)
+    # Use difficulty hint for anomaly type
+    if difficulty == "easy":
+        anomaly_type = "error_spike"
+    elif difficulty == "hard":
+        anomaly_type = "cascade_failure"
+    else:
+        anomaly_type = _detect_anomaly_type(combined_output)
+
     component = _extract_component_from_errors(combined_output)
     if not component:
         components = re.findall(r"\b(service_[a-d])\b", combined_output.lower())
@@ -532,24 +515,22 @@ def _guess_submit_answer(command_history: List[Dict[str, Any]]) -> LogAction:
     )
 
 
-async def run_episode(
-    env: Union[LogAnomalyEnvClient, LocalEnvWrapper],
+def run_episode(
+    env,
     agent: ReactAgent,
     difficulty: str,
     episode_num: int,
     verbose_log: Optional[VerboseLog] = None,
-    pbar: Optional[tqdm] = None,
 ) -> Optional[EpisodeResult]:
     """
-    Run a single episode.
+    Run a single episode (synchronous).
 
     Args:
-        env: Environment client (WebSocket or local)
+        env: Environment instance (LogAnomalyEnvironment)
         agent: ReAct agent
         difficulty: Difficulty level
         episode_num: Episode number (for seed)
         verbose_log: Optional verbose log container
-        pbar: Optional progress bar
 
     Returns:
         EpisodeResult or None if error
@@ -559,27 +540,27 @@ async def run_episode(
     command_history: List[Dict[str, Any]] = []
 
     try:
-        # Reset environment
-        result = await env.reset(difficulty=difficulty, seed=episode_num)
-        obs = result.observation
+        # Reset environment with seed for reproducibility
+        seed = BASELINE_SEED + episode_num
+        obs = env.reset(difficulty=difficulty, seed=seed)
 
-        if pbar:
-            pbar.set_description(f"{difficulty} ep{episode_num + 1}")
+        steps_remaining = obs.steps_remaining
+        total_steps = obs.total_steps
+        done = False
 
         for step in range(agent.max_steps):
-            if result.done or obs.answer_submitted:
+            if done or obs.answer_submitted:
                 break
 
             is_last_step = step == agent.max_steps - 1
 
             if is_last_step and not obs.answer_submitted:
                 # Force submission
-                action = _guess_submit_answer(command_history)
-                action_desc = "submit (forced)"
+                action = _guess_submit_answer(command_history, difficulty)
             else:
                 # Agent thinks
-                thought = await agent.think(
-                    command_output=obs.command_output,
+                thought = agent.think(
+                    command_output=obs.command_output or "",
                     command_history=command_history,
                     steps_remaining=obs.steps_remaining,
                     total_steps=obs.total_steps,
@@ -597,22 +578,35 @@ async def run_episode(
                     ]
                     cmd = fallback_commands[min(step, len(fallback_commands) - 1)]
                     action = LogAction(action_type="bash", command=cmd)
-                    action_desc = f"bash (deferred submit): {cmd}"
-                elif action.action_type == "bash":
-                    action_desc = f"bash: {action.command}"
-                else:
-                    action_desc = "submit"
+
+            # Convert LogAction to InvestigationAction for the environment
+            if action.action_type == "bash":
+                inv_action = InvestigationAction(
+                    action_type="bash",
+                    bash_command=BashCommand(command=action.command or ""),
+                )
+            else:
+                inv_action = InvestigationAction(
+                    action_type="submit",
+                    answer=SubmitAnswer(
+                        anomaly_type=AnomalyType(action.anomaly_type or "error_spike"),
+                        component=action.component or "unknown",
+                        start_time=action.start_time or "",
+                        end_time=action.end_time or "",
+                        confidence=action.confidence,
+                    ),
+                )
 
             # Execute action
-            result = await env.step(action)
-            obs = result.observation
+            obs = env.step(inv_action)
+            done = obs.answer_submitted or obs.steps_remaining <= 0
 
             # Update command history for bash actions
             if action.action_type == "bash":
                 command_history.append(
                     {
                         "command": action.command,
-                        "output": obs.command_output,
+                        "output": obs.command_output or "",
                     }
                 )
 
@@ -621,33 +615,14 @@ async def run_episode(
                 "step": step + 1,
                 "action_type": action.action_type,
                 "action": action.model_dump(exclude_none=True),
-                "output": obs.command_output[:500] if obs.command_output else "",
-                "reward": result.reward,
-                "done": result.done,
+                "output": (obs.command_output or "")[:500],
+                "reward": obs.reward,
+                "done": done,
             }
             step_logs.append(step_log)
 
-            if pbar:
-                pbar.update(0)  # Refresh display
-
         # Get episode result
-        if hasattr(env, "get_result"):
-            episode_result = env.get_result()
-        else:
-            # For WebSocket client, build result from final observation
-            episode_result = EpisodeResult(
-                episode_id=episode_id,
-                task_id=episode_id,
-                difficulty=DifficultyLevel(difficulty),
-                reward=result.reward or 0.0,
-                component_score=0.0,  # Not available from WebSocket
-                type_score=0.0,
-                window_score=0.0,
-                efficiency_score=0.0,
-                steps_used=len(step_logs),
-                episode_complete=result.done,
-                ground_truth={},
-            )
+        episode_result = env.get_result()
 
         if verbose_log:
             verbose_log.add_episode(episode_id, difficulty, step_logs, episode_result)
@@ -656,25 +631,24 @@ async def run_episode(
 
     except Exception as e:
         logger.error(f"Episode {episode_id} failed: {e}")
+        import traceback
+
+        traceback.print_exc()
         if verbose_log:
             verbose_log.add_episode(episode_id, difficulty, step_logs, None)
         return None
 
 
-async def run_baseline_inference(
-    env_url: str,
-    use_local: bool,
+def run_baseline_inference(
     difficulty: str,
     num_episodes: int,
     model: str,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Run baseline inference on the environment.
+    Run baseline inference on the environment (synchronous).
 
     Args:
-        env_url: Environment URL (HF Space or local server)
-        use_local: If True, use local environment import
         difficulty: Difficulty level ("easy", "medium", "hard", or "all")
         num_episodes: Number of episodes per difficulty
         model: Model to use for inference
@@ -690,6 +664,9 @@ async def run_baseline_inference(
             "baseline_scores": {},
         }
 
+    # Import environment locally
+    from server.log_anomaly_environment import LogAnomalyEnvironment
+
     # Create agent
     agent = ReactAgent(model=model, max_steps=MAX_STEPS, base_url=API_BASE_URL)
     verbose_log = VerboseLog() if output_path else None
@@ -703,37 +680,27 @@ async def run_baseline_inference(
     total_episodes = len(difficulties) * num_episodes
     all_results: List[EpisodeResult] = []
 
-    try:
-        # Create environment
-        if use_local:
-            from server.log_anomaly_environment import LogAnomalyEnvironment
+    # Create environment
+    env = LogAnomalyEnvironment()
 
-            env = LocalEnvWrapper(LogAnomalyEnvironment())
-        else:
-            env = LogAnomalyEnvClient(base_url=env_url)
+    with tqdm(total=total_episodes, desc="Running episodes", unit="ep") as pbar:
+        for diff in difficulties:
+            for ep_num in range(num_episodes):
+                pbar.set_description(f"{diff} ep{ep_num + 1}")
 
-        async with env:
-            with tqdm(total=total_episodes, desc="Running episodes", unit="ep") as pbar:
-                for diff in difficulties:
-                    for ep_num in range(num_episodes):
-                        result = await run_episode(
-                            env=env,
-                            agent=agent,
-                            difficulty=diff,
-                            episode_num=ep_num,
-                            verbose_log=verbose_log,
-                            pbar=pbar,
-                        )
-                        if result:
-                            all_results.append(result)
-                            pbar.set_postfix(
-                                reward=f"{result.reward:.2f}",
-                                diff=diff,
-                            )
-                        pbar.update(1)
+                result = run_episode(
+                    env=env,
+                    agent=agent,
+                    difficulty=diff,
+                    episode_num=ep_num,
+                    verbose_log=verbose_log,
+                )
 
-    finally:
-        await agent.close()
+                if result:
+                    all_results.append(result)
+                    pbar.set_postfix(reward=f"{result.reward:.2f}")
+
+                pbar.update(1)
 
     # Calculate summary
     summary = calculate_summary_stats(all_results) if all_results else {}
@@ -742,7 +709,6 @@ async def run_baseline_inference(
     results = {
         "status": "success",
         "model": model,
-        "env_url": env_url if not use_local else "local",
         "total_episodes": len(all_results),
         "baseline_scores": summary,
         "detailed_results": [r.model_dump() for r in all_results],
@@ -756,8 +722,8 @@ async def run_baseline_inference(
     return results
 
 
-async def main_async() -> None:
-    """Async main entry point."""
+def main() -> None:
+    """Main entry point."""
     parser = argparse.ArgumentParser(
         description="Run baseline inference on Log Anomaly Investigation Environment"
     )
@@ -778,48 +744,32 @@ async def main_async() -> None:
         "--episodes",
         "-e",
         type=int,
-        default=3,
-        help="Number of episodes per difficulty",
+        default=2,
+        help="Number of episodes per difficulty (default: 2)",
     )
     parser.add_argument(
         "--output",
         "-o",
         help="Output file for verbose results (JSON)",
     )
-    parser.add_argument(
-        "--url",
-        default=DEFAULT_ENV_URL,
-        help=f"Environment URL (default: {DEFAULT_ENV_URL})",
-    )
-    parser.add_argument(
-        "--local",
-        action="store_true",
-        help="Use local environment instead of WebSocket connection",
-    )
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=MAX_STEPS,
-        help=f"Maximum steps per episode (default: {MAX_STEPS})",
-    )
 
     args = parser.parse_args()
     model = args.model or MODEL_NAME
 
     # Print configuration
-    print(f"Running inference with model: {model}")
+    print("=" * 60)
+    print("Log Anomaly Investigation - Baseline Inference")
+    print("=" * 60)
+    print(f"Model: {model}")
     print(f"API Base URL: {API_BASE_URL}")
-    if args.local:
-        print("Environment: LOCAL (direct import)")
-    else:
-        print(f"Environment URL: {args.url}")
     print(f"Difficulty: {args.difficulty}")
     print(f"Episodes per difficulty: {args.episodes}")
+    print(f"Temperature: {BASELINE_TEMPERATURE} (for reproducibility)")
+    print(f"Seed: {BASELINE_SEED}")
+    print("=" * 60)
     print()
 
-    results = await run_baseline_inference(
-        env_url=args.url,
-        use_local=args.local,
+    results = run_baseline_inference(
         difficulty=args.difficulty,
         num_episodes=args.episodes,
         model=model,
@@ -827,13 +777,12 @@ async def main_async() -> None:
     )
 
     # Print summary
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("INFERENCE RESULTS")
-    print("=" * 50)
+    print("=" * 60)
 
     if results["status"] == "success":
         print(f"\nModel: {results['model']}")
-        print(f"Environment: {results['env_url']}")
         print(f"Total episodes: {results['total_episodes']}")
 
         baseline = results.get("baseline_scores", {})
@@ -849,10 +798,7 @@ async def main_async() -> None:
     else:
         print(f"\nError: {results.get('message', 'Unknown error')}")
 
-
-def main() -> None:
-    """Main entry point."""
-    asyncio.run(main_async())
+    print("\n" + "=" * 60)
 
 
 if __name__ == "__main__":
