@@ -15,6 +15,7 @@ STDOUT FORMAT
 
 Usage:
     python inference.py --difficulty all --episodes 2
+    python inference.py --url https://ggtejas-log-anomaly-env.hf.space -d easy -e 1
 """
 
 import asyncio
@@ -43,6 +44,7 @@ from config import (
     OUTPUT_PREVIEW_SHORT,
     OUTPUT_PREVIEW_LONG,
 )
+from client import LogAnomalyEnvClient, DEFAULT_ENV_URL
 
 # =============================================================================
 # Environment Variables (as required by hackathon)
@@ -484,15 +486,17 @@ async def main() -> None:
         default=None,
         help="Model to use",
     )
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_ENV_URL,
+        help=f"Environment URL (default: {DEFAULT_ENV_URL})",
+    )
 
     args = parser.parse_args()
     model = args.model or MODEL_NAME
 
-    # Import environment and wrapper
-    from server.log_anomaly_environment import LogAnomalyEnvironment
-    from client import LocalEnvWrapper
-
-    env = LocalEnvWrapper(LogAnomalyEnvironment())
+    # Create WebSocket client to HF Space
+    env = LogAnomalyEnvClient(base_url=args.url)
 
     # Create agent
     agent = ReactAgent(model=model, max_steps=MAX_STEPS, base_url=API_BASE_URL)
@@ -520,11 +524,8 @@ async def main() -> None:
                         model_name=model,
                     )
                     all_scores.append(score)
-    finally:
-        try:
-            await env.close()
-        except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", flush=True)
+    except Exception as e:
+        print(f"[DEBUG] Environment error: {e}", flush=True)
 
     # Print summary (separate from structured logs)
     if all_scores:
