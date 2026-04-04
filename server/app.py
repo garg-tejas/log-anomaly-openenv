@@ -12,8 +12,11 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from fastapi.responses import RedirectResponse
 
 load_dotenv()
+# Default to web UI enabled unless explicitly overridden by environment.
+os.environ.setdefault("ENABLE_WEB_INTERFACE", "1")
 
 # Add parent directory to path for imports when running directly
 _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +38,11 @@ from models import LogAction, LogObservation
 # This should be >= gradient_accumulation_steps * per_device_batch_size
 SUPPORTS_CONCURRENT_SESSIONS: bool = True
 MAX_CONCURRENT_ENVS: int = int(os.getenv("LOG_ANOMALY_MAX_CONCURRENT_ENVS", "64"))
+WEB_INTERFACE_ENABLED: bool = os.getenv("ENABLE_WEB_INTERFACE", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 
 
 # =============================================================================
@@ -64,6 +72,18 @@ app = create_app(
     max_concurrent_envs=MAX_CONCURRENT_ENVS,
     gradio_builder=build_log_anomaly_tab,
 )
+
+
+@app.get("/", include_in_schema=False, response_model=None)
+def root():
+    """Serve UI from root when web interface is enabled."""
+    if WEB_INTERFACE_ENABLED:
+        return RedirectResponse(url="/web")
+    return {
+        "message": "Log Anomaly Environment API",
+        "docs": "/docs",
+        "web": "Set ENABLE_WEB_INTERFACE=1 and open /web",
+    }
 
 
 def main() -> None:
