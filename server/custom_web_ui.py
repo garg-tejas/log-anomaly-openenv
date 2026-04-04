@@ -106,7 +106,8 @@ def build_log_anomaly_tab(
         )
 
     with gr.Blocks() as tab:
-        gr.Markdown(f"### {metadata.title or metadata.name} - Custom Investigation View")
+        display_name = getattr(metadata, "title", None) or getattr(metadata, "name", "Environment")
+        gr.Markdown(f"### {display_name} - Custom Investigation View")
         gr.Markdown(
             "Use this tab for quick manual debugging with controlled reset/step flows. "
             "Core OpenEnv APIs remain available at `/reset`, `/step`, and `/state`."
