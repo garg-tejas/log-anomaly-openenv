@@ -35,6 +35,12 @@ from config import (
     ALLOWED_COMMANDS,
     MAX_COMMAND_HISTORY,
     REWARD_TIMEOUT,
+    STEP_REWARD_ENABLED,
+    STEP_REWARD_MIN,
+    STEP_REWARD_MAX,
+    STEP_NOVELTY_BONUS,
+    STEP_REPEAT_PENALTY,
+    STEP_INVALID_PENALTY,
     get_difficulty_config,
     get_logger,
     parse_timestamp,
@@ -129,6 +135,13 @@ class InvestigationEpisode:
         self.answer_submitted = False
         self.predicted_answer: Optional[SubmitAnswer] = None
         self.episode_reward = 0.0
+        self._potential_prev = 0.0
+        self._seen_commands: set[str] = set()
+        self._evidence_state: Dict[str, float] = {
+            "component_progress": 0.0,
+            "type_progress": 0.0,
+            "window_progress": 0.0,
+        }
 
         # Initialize grader
         self.grader = InvestigationGrader()
@@ -155,6 +168,13 @@ class InvestigationEpisode:
         self.answer_submitted = False
         self.predicted_answer = None
         self.episode_reward = 0.0
+        self._potential_prev = 0.0
+        self._seen_commands = set()
+        self._evidence_state = {
+            "component_progress": 0.0,
+            "type_progress": 0.0,
+            "window_progress": 0.0,
+        }
 
         # Build metadata with mode-appropriate hints
         metadata = {
@@ -401,7 +421,13 @@ class InvestigationEpisode:
 
         if repeat_count >= 2:
             # Block the command after 2 repeats (3rd attempt blocked)
-            # No penalty to episode_reward - only final graded reward matters
+            step_reward, shaping = self._compute_intermediate_reward(
+                stdout="",
+                stderr="Repeated command blocked",
+                command=command,
+                is_valid=False,
+                is_blocked_repeat=True,
+            )
             return LogObservation(
                 command_output=f"BLOCKED: You've run this exact command {repeat_count + 1} times. Try a different approach.",
                 stderr="Repeated command blocked",
@@ -411,12 +437,13 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=0.0,  # No intermediate rewards
+                reward=step_reward,
                 metadata={
                     "error": "repeat_blocked",
                     "repeat_count": repeat_count + 1,
                     "command": command,
                     "command_history": self.command_history,  # Keep history for DO NOT REPEAT
+                    "shaping": shaping,
                 },
             )
 
@@ -432,6 +459,12 @@ class InvestigationEpisode:
                     "error": error_msg,
                 }
             )
+            step_reward, shaping = self._compute_intermediate_reward(
+                stdout="",
+                stderr=error_msg,
+                command=command,
+                is_valid=False,
+            )
             return LogObservation(
                 command_output=f"Error: {error_msg}",
                 stderr=error_msg,
@@ -441,11 +474,12 @@ class InvestigationEpisode:
                 answer_submitted=False,
                 task_difficulty=self.difficulty.value,
                 done=False,
-                reward=0.0,  # No intermediate rewards
+                reward=step_reward,
                 metadata={
                     "error": error_msg,
                     "command": command,
                     "command_history": self.command_history,  # Keep history for DO NOT REPEAT
+                    "shaping": shaping,
                 },
             )
 
@@ -464,8 +498,12 @@ class InvestigationEpisode:
         if len(self.command_history) > MAX_COMMAND_HISTORY:
             self.command_history = self.command_history[-MAX_COMMAND_HISTORY:]
 
-        # No intermediate rewards - only final graded reward matters (0.0-1.0 range)
-        # This ensures all episode rewards stay in the required 0.0-1.0 range
+        step_reward, shaping = self._compute_intermediate_reward(
+            stdout=stdout,
+            stderr=stderr,
+            command=command,
+            is_valid=True,
+        )
 
         return LogObservation(
             command_output=stdout,
@@ -476,11 +514,13 @@ class InvestigationEpisode:
             answer_submitted=False,
             task_difficulty=self.difficulty.value,
             done=False,
-            reward=0.0,  # No reward until final submission
+            reward=step_reward,
             metadata={
                 "command": command,
                 "output_truncated": len(stdout) >= self.OUTPUT_TRUNCATION,
                 "command_history": self.command_history,  # Full history for prompt building
+                "shaping": shaping,
+                "evidence_state": self._evidence_state.copy(),
             },
         )
 
@@ -577,42 +617,113 @@ class InvestigationEpisode:
         except Exception as e:
             return "", f"Execution error: {str(e)}"
 
-    def _compute_intermediate_reward(self, stdout: str, stderr: str) -> float:
-        """Compute small intermediate reward based on command output."""
-        if not stdout or stderr:
-            return 0.0
+    def _compute_intermediate_reward(
+        self,
+        stdout: str,
+        stderr: str,
+        command: str,
+        is_valid: bool,
+        is_blocked_repeat: bool = False,
+    ) -> Tuple[float, Dict[str, Any]]:
+        """Compute potential-based shaping reward for bash steps."""
+        if not STEP_REWARD_ENABLED:
+            return 0.0, {"enabled": False}
 
-        reward = 0.0
-        gt = self.ground_truth
+        normalized_cmd = self._normalize_command(command)
+        was_seen = normalized_cmd in self._seen_commands
+        self._seen_commands.add(normalized_cmd)
 
-        # Small positive if output contains the affected component
-        if gt.get("component") and gt["component"].lower() in stdout.lower():
-            reward += 0.02
+        # Compute potential from evidence and enforce monotonic progress.
+        potential_before = self._potential_prev
+        evidence_update = self._compute_evidence_progress(stdout)
+        for key, value in evidence_update.items():
+            self._evidence_state[key] = max(self._evidence_state.get(key, 0.0), value)
 
-        # Check for timestamps in anomaly window
-        try:
-            gt_start = parse_timestamp(str(gt.get("start_time", "")))
-            gt_end = parse_timestamp(str(gt.get("end_time", "")))
+        potential_after = (
+            0.40 * self._evidence_state["component_progress"]
+            + 0.30 * self._evidence_state["type_progress"]
+            + 0.30 * self._evidence_state["window_progress"]
+        )
+        delta = potential_after - potential_before
+        self._potential_prev = max(self._potential_prev, potential_after)
 
-            if gt_start is None or gt_end is None:
-                raise ValueError("Missing ground truth timestamps")
+        novelty_bonus = STEP_NOVELTY_BONUS if not was_seen and is_valid else 0.0
+        penalty = 0.0
+        if not is_valid:
+            penalty -= STEP_INVALID_PENALTY
+        if is_blocked_repeat:
+            penalty -= STEP_REPEAT_PENALTY
+        elif len(self.command_history) >= 2:
+            prev_cmd = self._normalize_command(self.command_history[-2].get("command", ""))
+            if prev_cmd == normalized_cmd:
+                penalty -= STEP_REPEAT_PENALTY
 
+        if stderr and is_valid:
+            penalty -= STEP_INVALID_PENALTY / 2.0
+
+        step_reward = delta + novelty_bonus + penalty
+        step_reward = max(STEP_REWARD_MIN, min(STEP_REWARD_MAX, step_reward))
+
+        shaping = {
+            "enabled": True,
+            "potential_before": round(potential_before, 4),
+            "potential_after": round(potential_after, 4),
+            "delta": round(delta, 4),
+            "novelty_bonus": round(novelty_bonus, 4),
+            "penalty": round(penalty, 4),
+            "step_reward": round(step_reward, 4),
+            "was_seen_command": was_seen,
+        }
+        return step_reward, shaping
+
+    def _compute_evidence_progress(self, stdout: str) -> Dict[str, float]:
+        """Estimate evidence progress against ground truth from command output."""
+        if not stdout:
+            return {
+                "component_progress": 0.0,
+                "type_progress": 0.0,
+                "window_progress": 0.0,
+            }
+
+        out = stdout.lower()
+        gt_component = str(self.ground_truth.get("component", "")).lower()
+        gt_type = str(self.ground_truth.get("anomaly_type", "")).lower()
+
+        component_progress = 1.0 if gt_component and gt_component in out else 0.0
+
+        type_keywords = {
+            "error_spike": ["error", "spike", "failed", "exception"],
+            "memory_leak": ["memory", "heap", "outofmemory", "gc"],
+            "service_dropout": ["drop", "unavailable", "down", "disconnect"],
+            "cascade_failure": ["cascade", "dependency", "circuit", "propagate"],
+            "latency_degradation": ["latency", "timeout", "slow", "response time"],
+            "auth_anomaly": ["auth", "token", "unauthorized", "forbidden"],
+        }
+        hits = 0
+        keywords = type_keywords.get(gt_type, [])
+        for kw in keywords:
+            if kw in out:
+                hits += 1
+        type_progress = min(1.0, hits / max(len(keywords), 1))
+
+        gt_start = parse_timestamp(str(self.ground_truth.get("start_time", "")))
+        gt_end = parse_timestamp(str(self.ground_truth.get("end_time", "")))
+        window_progress = 0.0
+        if gt_start and gt_end:
             timestamp_pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
             for match in re.finditer(timestamp_pattern, stdout):
                 ts = parse_timestamp(match.group(0))
-                if ts and gt_start <= ts <= gt_end:
-                    reward += 0.02
-                    break
-        except (ValueError, TypeError, AttributeError) as e:
-            logger.debug("Failed to calculate step reward: %s", e)
+                if ts is not None:
+                    if gt_start <= ts <= gt_end:
+                        window_progress = 1.0
+                        break
+                    window_progress = max(window_progress, 0.3)
 
-        # Penalize repetitive commands
-        if len(self.command_history) >= 3:
-            last_three = [h["command"] for h in self.command_history[-3:]]
-            if len(set(cmd.split()[0] for cmd in last_three if cmd.strip())) == 1:
-                reward -= 0.01
-
-        return max(-0.05, min(0.05, reward))
+        return {
+            "component_progress": component_progress,
+            "type_progress": type_progress,
+            "window_progress": window_progress,
+        }
 
     def _format_answer_feedback(self, result: EpisodeResult, show_ground_truth: bool = True) -> str:
         """Format feedback for submitted answer."""

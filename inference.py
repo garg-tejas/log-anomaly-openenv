@@ -5,6 +5,7 @@ MANDATORY ENVIRONMENT VARIABLES (set these before running):
     API_BASE_URL   The API endpoint for the LLM (default: HuggingFace router)
     MODEL_NAME     The model identifier to use for inference
     HF_TOKEN       Your Hugging Face API key
+    BASE_URL       The environment URL (default: https://ggtejas-log-anomaly-env.hf.space)
 
 STDOUT FORMAT
 - The script emits exactly three line types to stdout:
@@ -14,14 +15,15 @@ STDOUT FORMAT
     [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 
 Usage:
-    python inference.py --difficulty all --episodes 2
-    python inference.py --url https://ggtejas-log-anomaly-env.hf.space -d easy -e 1
+    uv run python inference.py --mode batch --difficulty all --episodes 2
+    uv run python inference.py --mode single --difficulty easy --url http://localhost:8000
 """
 
 import asyncio
 import json
 import argparse
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,7 +46,7 @@ from config import (
     OUTPUT_PREVIEW_SHORT,
     OUTPUT_PREVIEW_LONG,
 )
-from client import LogAnomalyEnvClient, DEFAULT_ENV_URL
+from client import LogAnomalyEnvClient
 
 # =============================================================================
 # Environment Variables (as required by hackathon)
@@ -53,6 +55,7 @@ from client import LogAnomalyEnvClient, DEFAULT_ENV_URL
 API_BASE_URL = os.getenv("API_BASE_URL") or HF_ROUTER_URL
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME") or DEFAULT_MODEL
+DEFAULT_BASE_URL = os.getenv("BASE_URL") or "https://ggtejas-log-anomaly-env.hf.space"
 
 # Benchmark identifier
 BENCHMARK = "log-anomaly"
@@ -443,8 +446,8 @@ async def run_episode(
             if done:
                 break
 
-        # Calculate final score (average reward, clamped to 0-1)
-        score = sum(rewards) / len(rewards) if rewards else 0.0
+        # Episode score is terminal-only to preserve 0..1 benchmark semantics.
+        score = rewards[-1] if rewards else 0.0
         score = min(max(score, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
@@ -467,6 +470,12 @@ async def main() -> None:
     """Main entry point (async)."""
     parser = argparse.ArgumentParser(description="Log Anomaly Investigation Inference")
     parser.add_argument(
+        "--mode",
+        choices=["batch", "single"],
+        default="batch",
+        help="Run mode: batch baseline (default) or single-task episode",
+    )
+    parser.add_argument(
         "--difficulty",
         "-d",
         choices=["easy", "medium", "hard", "all"],
@@ -488,24 +497,36 @@ async def main() -> None:
     )
     parser.add_argument(
         "--url",
-        default=DEFAULT_ENV_URL,
-        help=f"Environment URL (default: {DEFAULT_ENV_URL})",
+        default=DEFAULT_BASE_URL,
+        help=f"Environment URL (default from BASE_URL or {DEFAULT_BASE_URL})",
+    )
+    parser.add_argument(
+        "--summary-to-stderr",
+        action="store_true",
+        help="Print aggregate baseline summary to stderr (stdout remains structured logs only).",
     )
 
     args = parser.parse_args()
     model = args.model or MODEL_NAME
 
-    # Create WebSocket client to HF Space
+    # Create WebSocket client
     env = LogAnomalyEnvClient(base_url=args.url)
 
     # Create agent
     agent = ReactAgent(model=model, max_steps=MAX_STEPS, base_url=API_BASE_URL)
 
-    # Determine tasks (difficulties)
-    if args.difficulty == "all":
-        difficulties = [d.value for d in DifficultyLevel]
-    else:
+    # Determine task list
+    if args.mode == "single":
+        if args.difficulty == "all":
+            parser.error("--mode single requires --difficulty easy|medium|hard")
         difficulties = [args.difficulty]
+        episodes_per_difficulty = 1
+    else:
+        if args.difficulty == "all":
+            difficulties = [d.value for d in DifficultyLevel]
+        else:
+            difficulties = [args.difficulty]
+        episodes_per_difficulty = max(args.episodes, 1)
 
     # Run episodes
     all_scores: List[float] = []
@@ -513,7 +534,7 @@ async def main() -> None:
     try:
         async with env:
             for difficulty in difficulties:
-                for ep_num in range(args.episodes):
+                for ep_num in range(episodes_per_difficulty):
                     task_name = f"{difficulty}_{ep_num + 1}"
                     score, steps, rewards = await run_episode(
                         env=env,
@@ -525,16 +546,16 @@ async def main() -> None:
                     )
                     all_scores.append(score)
     except Exception as e:
-        print(f"[DEBUG] Environment error: {e}", flush=True)
+        print(f"Environment error: {e}", file=sys.stderr, flush=True)
 
-    # Print summary (separate from structured logs)
-    if all_scores:
-        print("\n" + "=" * 50, flush=True)
-        print("SUMMARY", flush=True)
-        print("=" * 50, flush=True)
-        print(f"Total episodes: {len(all_scores)}", flush=True)
-        print(f"Mean score: {sum(all_scores) / len(all_scores):.3f}", flush=True)
-        print("=" * 50, flush=True)
+    # Optional aggregate summary (stderr only, keeps stdout parser-safe)
+    if all_scores and args.summary_to_stderr:
+        mean_score = sum(all_scores) / len(all_scores)
+        print(
+            f"Baseline summary: episodes={len(all_scores)} mean_score={mean_score:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

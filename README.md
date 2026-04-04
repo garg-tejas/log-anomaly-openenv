@@ -15,11 +15,11 @@ tags:
 
 # Log Anomaly Investigation Environment
 
-A real-world OpenEnv environment for training AI agents to investigate log anomalies using bash command exploration.
+A real-world OpenEnv environment for evaluating AI agents on log anomaly investigation with bash command exploration.
 
 ## Overview
 
-This environment simulates a realistic log investigation scenario where an agent must identify anomalies in system logs using only read-only bash commands. It provides a sandboxed environment for training and evaluating AI agents on multi-turn investigation tasks.
+This environment simulates a realistic log investigation scenario where an agent must identify anomalies in system logs using only read-only bash commands. It provides a sandboxed environment for multi-turn agent evaluation and baseline end-to-end validation.
 
 ### Key Features
 
@@ -28,6 +28,16 @@ This environment simulates a realistic log investigation scenario where an agent
 - **Multiple Difficulty Levels**: Easy, Medium, and Hard tasks
 - **Multi-axis Grading**: Component identification, type classification, window precision, efficiency
 - **Baseline Inference**: ReAct + Qwen baseline included
+
+## Round 1 Scope
+
+For OpenEnv Round 1, this repository focuses on:
+
+- A working OpenEnv-compliant environment (`reset`, `step`, `state`)
+- At least three graded tasks (easy/medium/hard)
+- A reproducible baseline `inference.py` to demonstrate agent interaction
+
+RL training is optional and not required for Round 1 submission.
 
 ## Installation
 
@@ -101,6 +111,16 @@ docker build -t log-anomaly-env:latest -f server/Dockerfile .
 docker run -p 8000:8000 log-anomaly-env:latest
 ```
 
+To enable the OpenEnv web UI:
+
+```bash
+export ENABLE_WEB_INTERFACE=1
+uv run python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
+# Open http://localhost:8000/web
+```
+
+The web app includes the default Playground and a custom Visualization tab for investigation-specific controls.
+
 ### Using HTTP Endpoints
 
 ```bash
@@ -114,7 +134,7 @@ curl -X POST http://localhost:8000/step \
   -H "Content-Type: application/json" \
   -d '{
     "action_type": "bash",
-    "bash_command": {"command": "grep ERROR log.txt | head -20"}
+    "command": "grep ERROR log.txt | head -20"
   }'
 
 # Submit answer
@@ -122,12 +142,10 @@ curl -X POST http://localhost:8000/step \
   -H "Content-Type: application/json" \
   -d '{
     "action_type": "submit",
-    "answer": {
-      "anomaly_type": "error_spike",
-      "component": "service_a",
-      "start_time": "2024-01-15T10:00:00",
-      "end_time": "2024-01-15T10:15:00"
-    }
+    "anomaly_type": "error_spike",
+    "component": "service_a",
+    "start_time": "2024-01-15T10:00:00",
+    "end_time": "2024-01-15T10:15:00"
   }'
 ```
 
@@ -210,7 +228,7 @@ _9 episodes (3 per difficulty). Hard tasks require identifying the root cause co
 
 ## Baseline Inference
 
-Run the ReAct + Qwen baseline:
+Run the ReAct + Qwen baseline. The script is environment-variable driven and works for both local and deployed environments.
 
 ### Option 1: HuggingFace Router (Cloud)
 
@@ -218,9 +236,10 @@ Run the ReAct + Qwen baseline:
 # Set HuggingFace token
 export HF_TOKEN="your-huggingface-token"
 export MODEL_NAME="Qwen/Qwen3.5-4B"  # optional, has default
+export BASE_URL="https://your-space-name.hf.space"
 
-# Run baseline
-uv run python inference.py --difficulty all --episodes 5
+# Batch baseline across easy/medium/hard (default mode)
+uv run python inference.py --mode batch --difficulty all --episodes 2
 ```
 
 ### Option 2: Local LLM with Ollama
@@ -232,9 +251,10 @@ ollama pull qwen2.5:7b
 # Set environment variables
 export API_BASE_URL="http://localhost:11434/v1"
 export MODEL_NAME="qwen2.5:7b"
+export BASE_URL="http://localhost:8000"
 
 # Run baseline
-uv run python inference.py --difficulty all --episodes 3
+uv run python inference.py --mode batch --difficulty all --episodes 2
 ```
 
 ### Option 3: Local LLM with vLLM
@@ -247,25 +267,26 @@ python -m vllm.entrypoints.openai.api_server \
 # Set environment variables
 export API_BASE_URL="http://localhost:8080/v1"
 export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
+export BASE_URL="http://localhost:8000"
 
 # Run baseline
-uv run python inference.py --difficulty all --episodes 3
+uv run python inference.py --mode batch --difficulty all --episodes 2
 ```
 
-### Programmatic Usage
+### Single-Task Execution (Evaluator-Compatible)
 
-```python
-from inference import run_baseline_inference
-
-results = run_baseline_inference(
-    environment=env,
-    difficulty="all",
-    model="Qwen/Qwen3.5-4B",
-    num_episodes=3,
-)
+```bash
+# One task, one episode
+uv run python inference.py --mode single --difficulty medium --url http://localhost:8000
 ```
 
-## Training with TRL/GRPO
+### Optional Aggregate Summary
+
+```bash
+uv run python inference.py --mode batch --difficulty all --episodes 2 --summary-to-stderr
+```
+
+## Optional: Training with TRL/GRPO
 
 This environment supports reinforcement learning training with TRL's GRPOTrainer.
 Train your own log investigation agent using Group Relative Policy Optimization.
@@ -382,32 +403,34 @@ After each episode, read `env.reward` (0.0-1.0) for the grading result.
 
 ### Models
 
-#### InvestigationAction
+#### LogAction
 
 ```python
 {
     "action_type": "bash" | "submit",
-    "bash_command": {"command": "string"},
-    "answer": {
-        "anomaly_type": "error_spike" | "memory_leak" | "service_dropout",
-        "component": "string",
-        "start_time": "ISO timestamp",
-        "end_time": "ISO timestamp"
-    }
+    "command": "string",  # for bash
+    "anomaly_type": "error_spike" | "memory_leak" | "service_dropout" | "latency_degradation" | "cascade_failure" | "auth_anomaly",
+    "component": "string",  # for submit
+    "start_time": "ISO timestamp",  # for submit
+    "end_time": "ISO timestamp",  # for submit
+    "confidence": 1.0
 }
 ```
 
-#### InvestigationObservation
+#### LogObservation
 
 ```python
 {
     "command_output": "string",
-    "command_history": [{"command": "...", "output": "..."}],
+    "stderr": "string",
+    "exit_code": 0,
     "steps_remaining": 15,
     "total_steps": 15,
     "answer_submitted": false,
     "task_difficulty": "easy" | "medium" | "hard",
-    "episode_reward": 0.0
+    "done": false,
+    "reward": 0.0,
+    "metadata": {}
 }
 ```
 

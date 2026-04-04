@@ -22,6 +22,7 @@ if _parent_dir not in sys.path:
 
 from openenv.core.env_server import create_app
 from server.log_anomaly_environment import LogAnomalyEnvironment
+from server.custom_web_ui import build_log_anomaly_tab
 from models import LogAction, LogObservation
 
 
@@ -61,6 +62,7 @@ app = create_app(
     LogObservation,
     env_name="log_anomaly_env",
     max_concurrent_envs=MAX_CONCURRENT_ENVS,
+    gradio_builder=build_log_anomaly_tab,
 )
 
 
