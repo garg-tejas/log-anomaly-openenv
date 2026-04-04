@@ -141,6 +141,18 @@ REWARD_PERFECT_FAST_BONUS = 0.2  # Bonus for perfect + fast answer
 REWARD_REPEAT_COMMAND_PENALTY = -0.3  # Penalty for repeating same command (blocked)
 REWARD_REPEAT_WARNING_PENALTY = -0.1  # Warning penalty for first repeat
 
+# Step shaping configuration (dense intermediate rewards)
+STEP_REWARD_ENABLED = os.getenv("LOG_ANOMALY_STEP_REWARD_ENABLED", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+STEP_REWARD_MIN = float(os.getenv("LOG_ANOMALY_STEP_REWARD_MIN", "0.00"))
+STEP_REWARD_MAX = float(os.getenv("LOG_ANOMALY_STEP_REWARD_MAX", "0.10"))
+STEP_NOVELTY_BONUS = float(os.getenv("LOG_ANOMALY_STEP_NOVELTY_BONUS", "0.005"))
+STEP_REPEAT_PENALTY = float(os.getenv("LOG_ANOMALY_STEP_REPEAT_PENALTY", "0.01"))
+STEP_INVALID_PENALTY = float(os.getenv("LOG_ANOMALY_STEP_INVALID_PENALTY", "0.02"))
+
 
 # =============================================================================
 # Difficulty Configuration
