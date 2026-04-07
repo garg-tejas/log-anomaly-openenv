@@ -65,38 +65,33 @@ uv sync
 ### Using the Python API
 
 ```python
-from log_anomaly_env import LogAnomalyEnv, InvestigationAction, BashCommand
+import asyncio
+from client import LogAnomalyEnvClient
+from models import LogAction
 
-# Connect to environment
-env = LogAnomalyEnv(base_url="http://localhost:8000")
+async def main() -> None:
+    async with LogAnomalyEnvClient(base_url="http://localhost:8000") as env:
+        # Reset and start episode
+        result = await env.reset(difficulty="easy")
+        print(f"Steps remaining: {result.observation.steps_remaining}")
 
-# Reset and start episode
-result = env.reset(difficulty="easy")
-print(f"Steps remaining: {result['observation']['steps_remaining']}")
+        # Execute bash command
+        result = await env.step(LogAction(action_type="bash", command="grep ERROR log.txt | head -20"))
+        print(result.observation.command_output[:500])
 
-# Execute bash commands
-action = InvestigationAction(
-    action_type="bash",
-    bash_command=BashCommand(command="grep ERROR log.txt | head -20")
-)
-result = env.step(action)
-print(result['observation']['command_output'][:500])
+        # Submit answer
+        result = await env.step(
+            LogAction(
+                action_type="submit",
+                anomaly_type="error_spike",
+                component="service_a",
+                start_time="2024-01-15T10:00:00",
+                end_time="2024-01-15T10:15:00",
+            )
+        )
+        print(f"Final reward: {result.reward}")
 
-# Submit answer when ready
-action = InvestigationAction(
-    action_type="submit",
-    answer={
-        "anomaly_type": "error_spike",
-        "component": "service_a",
-        "start_time": "2024-01-15T10:00:00",
-        "end_time": "2024-01-15T10:15:00"
-    }
-)
-result = env.step(action)
-
-# Get grading
-grade_result = env.grade(result['episode_id'])
-print(f"Total Score: {grade_result['reward']}")
+asyncio.run(main())
 ```
 
 ### Running the Server
@@ -111,12 +106,11 @@ docker build -t log-anomaly-env:latest -f server/Dockerfile .
 docker run -p 8000:8000 log-anomaly-env:latest
 ```
 
-To enable the OpenEnv web UI:
+Web UI is enabled by default. Start the server and open the root URL:
 
 ```bash
-export ENABLE_WEB_INTERFACE=1
 uv run python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
-# Open http://localhost:8000/web
+# Open http://localhost:8000 (redirects to /web)
 ```
 
 The web app includes the default Playground and a custom Visualization tab for investigation-specific controls.
@@ -211,23 +205,23 @@ The end-of-episode grader score used for evaluation is deterministic and normali
 
 ## Baseline Scores
 
-Baseline results using `Qwen/Qwen3.5-9B` with ReAct prompting (9 episodes):
+Baseline results using `Qwen/Qwen3.5-9B:together` with ReAct prompting (6 episodes, 2 per difficulty):
 
-| Difficulty  | Mean Reward | Component | Type | Window | Efficiency |
-| ----------- | ----------- | --------- | ---- | ------ | ---------- |
-| **Easy**    | 0.87        | 1.00      | 1.00 | 0.75   | 0.71       |
-| **Medium**  | 0.64        | 1.00      | 0.67 | 0.55   | 0.21       |
-| **Hard**    | 0.47        | 0.33      | 1.00 | 0.11   | 0.64       |
-| **Overall** | **0.66**    | 0.78      | 0.89 | 0.47   | 0.52       |
+| Difficulty  | Mean Final Score |
+| ----------- | ---------------- |
+| **Easy**    | 0.93             |
+| **Medium**  | 0.51             |
+| **Hard**    | 0.16             |
+| **Overall** | **0.53**         |
 
-_9 episodes (3 per difficulty). Hard tasks require identifying the root cause component in cascade failures, which remains challenging._
+_Scores above use episode-end grader score (normalized to `[0,1]`), not average step reward._
 
 ### Highlights
 
-- **Best episode**: 0.94 reward (easy) - near-perfect detection
-- **Easy tasks**: 100% component accuracy, 100% type accuracy
-- **Medium tasks**: 100% component accuracy, varied anomaly types (memory_leak, latency_degradation, service_dropout)
-- **Hard tasks**: Cascade failure type detection is strong (100%), but root cause identification is challenging (33%)
+- **Best episode**: 1.00 final score (easy)
+- **Easy tasks**: strong consistency with quick convergence
+- **Medium tasks**: stable partial-correct performance around 0.5
+- **Hard tasks**: highly variable; one episode failed after reconnect/timeout behavior
 
 ## Baseline Inference
 
@@ -243,6 +237,20 @@ export BASE_URL="https://your-space-name.hf.space"
 
 # Batch baseline across easy/medium/hard (default mode)
 uv run python inference.py --mode batch --difficulty all --episodes 2
+```
+
+### Option 1b: Local Docker Image (no BASE_URL required)
+
+```bash
+# Build your local environment image first
+docker build -t log-anomaly-env:latest -f server/Dockerfile .
+
+# Point inference to local image runtime
+export LOCAL_IMAGE_NAME="log-anomaly-env:latest"
+export HF_TOKEN="your-huggingface-token"
+export MODEL_NAME="Qwen/Qwen3.5-4B"
+
+uv run python inference.py --mode single --difficulty easy
 ```
 
 ### Option 2: Local LLM with Ollama
