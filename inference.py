@@ -2,10 +2,15 @@
 Inference Script for Log Anomaly Investigation Environment.
 ===================================
 MANDATORY ENVIRONMENT VARIABLES (set these before running):
-    API_BASE_URL   The API endpoint for the LLM (default: HuggingFace router)
+    API_BASE_URL   The API endpoint for the LLM
     MODEL_NAME     The model identifier to use for inference
     HF_TOKEN       Your Hugging Face API key
-    BASE_URL       The environment URL (default: https://ggtejas-log-anomaly-env.hf.space)
+    BASE_URL       The environment URL
+    LOCAL_IMAGE_NAME The local docker image name (optional, for from_docker_image mode)
+
+Defaults are set only for API_BASE_URL and MODEL_NAME:
+    API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+    MODEL_NAME = os.getenv("MODEL_NAME") or "<repo default>"
 
 STDOUT FORMAT
 - The script emits exactly three line types to stdout:
@@ -56,6 +61,7 @@ API_BASE_URL = os.getenv("API_BASE_URL") or HF_ROUTER_URL
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME") or DEFAULT_MODEL
 DEFAULT_BASE_URL = os.getenv("BASE_URL") or "https://ggtejas-log-anomaly-env.hf.space"
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 # Benchmark identifier
 BENCHMARK = "log-anomaly"
@@ -420,8 +426,8 @@ async def run_episode(
             obs = result.observation
             done = result.done or obs.answer_submitted or obs.steps_remaining <= 0
 
-            # Get reward (clamp to 0-1)
-            reward = min(max(result.reward or 0.0, 0.0), 1.0)
+            # Keep raw step reward for debugging/shaping visibility.
+            reward = float(result.reward) if result.reward is not None else 0.0
             rewards.append(reward)
             steps_taken = step
 
@@ -434,13 +440,19 @@ async def run_episode(
                     }
                 )
 
+            step_error = None
+            if isinstance(getattr(obs, "metadata", None), dict):
+                raw_error = obs.metadata.get("last_action_error") or obs.metadata.get("error")
+                if raw_error:
+                    step_error = str(raw_error).replace("\n", " ").replace("\r", "")
+
             # Log step
             log_step(
                 step=step,
                 action=action_str,
                 reward=reward,
                 done=done,
-                error=None,
+                error=step_error,
             )
 
             if done:
@@ -509,8 +521,11 @@ async def main() -> None:
     args = parser.parse_args()
     model = args.model or MODEL_NAME
 
-    # Create WebSocket client
-    env = LogAnomalyEnvClient(base_url=args.url)
+    # Create environment client from local image if requested, else by URL.
+    if LOCAL_IMAGE_NAME:
+        env = await LogAnomalyEnvClient.from_docker_image(LOCAL_IMAGE_NAME)
+    else:
+        env = LogAnomalyEnvClient(base_url=args.url)
 
     # Create agent
     agent = ReactAgent(model=model, max_steps=MAX_STEPS, base_url=API_BASE_URL)

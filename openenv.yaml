@@ -87,7 +87,7 @@ observation_space:
 
 # Reward structure
 reward:
-  range: [0.0, 1.0]
+  range: [-0.1, 1.0]
   components:
     component_score:
       weight: 0.25
@@ -175,7 +175,7 @@ training:
   max_concurrent_envs: 64
 
   # Reward characteristics (useful for RL algorithm selection)
-  reward_range: [0.0, 1.0]
+  reward_range: [-0.1, 1.0]
   reward_type: "dense"  # dense (multi-component) vs sparse (binary)
   episode_length: "variable"  # variable (1-20 steps) vs fixed
 

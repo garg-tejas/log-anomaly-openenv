@@ -198,6 +198,9 @@ Episodes are graded on four components:
 | Window Precision         | 0.35   | IoU of predicted vs actual time window    |
 | Investigation Efficiency | 0.15   | Fewer steps = higher score                |
 
+Step rewards are shaped during `/step` and may include small negative penalties.
+The end-of-episode grader score used for evaluation is deterministic and normalized to `[0.0, 1.0]`.
+
 ### Difficulty Levels
 
 | Level  | Intensity      | Anomaly Types    | Log Size    |
