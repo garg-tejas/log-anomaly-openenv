@@ -140,7 +140,7 @@ baseline_scores:
 
 # Environment configuration
 config:
-  max_steps: 15
+  max_steps: 20
   command_timeout: 10
   output_truncation: 4000
   allowed_commands:

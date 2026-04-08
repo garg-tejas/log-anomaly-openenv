@@ -17,6 +17,19 @@ tags:
 
 A real-world OpenEnv environment for evaluating AI agents on log anomaly investigation with bash command exploration.
 
+## Why This Matters
+
+Site Reliability Engineers (SREs) spend a significant chunk of their time investigating production incidents by digging through logs. The process is tedious but follows a systematic pattern: grep for errors, identify affected components, find when things started going wrong, and correlate across services.
+
+This is exactly the kind of task where AI agents could help, but training and evaluating them requires a realistic environment. Most existing benchmarks either use toy problems or require expensive infrastructure. This environment fills that gap by providing:
+
+- Realistic log investigation tasks that mirror actual SRE workflows
+- A safe sandbox where agents can run bash commands without risk
+- Multi-dimensional grading that measures what actually matters in incident response
+- Difficulty progression that genuinely challenges even frontier models (our hard tasks score 0.16 with Qwen3.5-9B)
+
+The goal is simple: if an agent can reliably investigate log anomalies here, it's a meaningful step toward agents that can actually help with on-call work.
+
 ## Overview
 
 This environment simulates a realistic log investigation scenario where an agent must identify anomalies in system logs using only read-only bash commands. It provides a sandboxed environment for multi-turn agent evaluation and baseline end-to-end validation.
@@ -28,6 +41,17 @@ This environment simulates a realistic log investigation scenario where an agent
 - **Multiple Difficulty Levels**: Easy, Medium, and Hard tasks
 - **Multi-axis Grading**: Component identification, type classification, window precision, efficiency
 - **Baseline Inference**: ReAct + Qwen baseline included
+
+## Architecture
+
+![Architecture](docs/architecture.png)
+
+The environment consists of:
+- **Agent Side**: ReAct agent with LLM API integration
+- **WebSocket Client**: Async client for communication with the environment server
+- **HuggingFace Space**: FastAPI server with WebSocket endpoint and Gradio Web UI
+- **Environment Core**: Investigation episodes with sandboxed log directories and command history
+- **Support Components**: Investigation grader, log parser, task generator, and LogHub sampler
 
 ## Round 1 Scope
 
@@ -98,11 +122,10 @@ asyncio.run(main())
 
 ```bash
 # Start the server
-cd log_anomaly_env
 uvicorn server.app:app --host 0.0.0.0 --port 8000
 
 # Or with Docker
-docker build -t log-anomaly-env:latest -f server/Dockerfile .
+docker build -t log-anomaly-env:latest .
 docker run -p 8000:8000 log-anomaly-env:latest
 ```
 
@@ -145,6 +168,10 @@ curl -X POST http://localhost:8000/step \
 
 ## Environment Details
 
+### Request Flow
+
+![Request Flow](docs/request-flow.png)
+
 ### Task Description
 
 The agent must investigate a log file to identify anomalies. An anomaly is characterized by:
@@ -175,11 +202,11 @@ The agent must investigate a log file to identify anomalies. An anomaly is chara
 | Field              | Description                               |
 | ------------------ | ----------------------------------------- |
 | `command_output`   | Output from the last bash command         |
-| `command_history`  | List of all previous commands and outputs |
-| `steps_remaining`  | Number of steps left (max 15)             |
+| `steps_remaining`  | Number of steps left (max 20)             |
 | `answer_submitted` | Whether the answer has been submitted     |
 | `task_difficulty`  | Current difficulty level                  |
-| `episode_reward`   | Cumulative reward so far                  |
+| `done`             | Whether the episode has ended             |
+| `reward`           | Reward from the last action               |
 
 ### Grading
 
@@ -216,85 +243,76 @@ Baseline results using `Qwen/Qwen3.5-9B:together` with ReAct prompting (6 episod
 
 _Scores above use episode-end grader score (normalized to `[0,1]`), not average step reward._
 
-### Highlights
+### What the Scores Tell Us
 
-- **Best episode**: 1.00 final score (easy)
-- **Easy tasks**: strong consistency with quick convergence
-- **Medium tasks**: stable partial-correct performance around 0.5
-- **Hard tasks**: highly variable; one episode failed after reconnect/timeout behavior
+Easy tasks are solvable with basic log exploration. The model consistently finds obvious error spikes and scores above 0.9.
+
+Medium tasks require more careful investigation. The model gets partial credit, typically identifying the right component but missing the exact time window or anomaly type.
+
+Hard tasks involve cascade failures where one service failure triggers others. These require multi-hop reasoning across service dependencies and temporal correlation. The 0.16 score shows this genuinely challenges the model. It often identifies symptoms but fails to trace back to the root cause or gets confused by the decoy anomalies we inject.
+
+This difficulty curve is intentional. We want easy tasks to validate basic agent capabilities, while hard tasks remain unsolved enough to drive meaningful research.
 
 ## Baseline Inference
 
-Run the ReAct + Qwen baseline. The script is environment-variable driven and works for both local and deployed environments.
+Run the ReAct + Qwen baseline agent. The script connects to the HuggingFace Space via WebSocket and outputs structured logs for hackathon evaluation.
 
-### Option 1: HuggingFace Router (Cloud)
+### Quick Start
 
 ```bash
-# Set HuggingFace token
+# Just run it - all defaults work out of the box
 export HF_TOKEN="your-huggingface-token"
-export MODEL_NAME="Qwen/Qwen3.5-4B"  # optional, has default
-export BASE_URL="https://your-space-name.hf.space"
+python inference.py
 
-# Batch baseline across easy/medium/hard (default mode)
-uv run python inference.py --mode batch --difficulty all --episodes 2
+# Customize difficulty and episodes
+python inference.py --difficulty easy --episodes 1
+python inference.py --difficulty medium --episodes 3
+python inference.py --difficulty all --episodes 2  # default: 2 per difficulty
 ```
 
-### Option 1b: Local Docker Image (no BASE_URL required)
+### Environment Variables
 
-```bash
-# Build your local environment image first
-docker build -t log-anomaly-env:latest -f server/Dockerfile .
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HF_TOKEN` | HuggingFace token for LLM API | Required |
+| `MODEL_NAME` | Model to use | `Qwen/Qwen3.5-4B` |
+| `API_BASE_URL` | LLM endpoint | HuggingFace Router |
 
-# Point inference to local image runtime
-export LOCAL_IMAGE_NAME="log-anomaly-env:latest"
-export HF_TOKEN="your-huggingface-token"
-export MODEL_NAME="Qwen/Qwen3.5-4B"
+### Output Format
 
-uv run python inference.py --mode single --difficulty easy
+The script outputs structured logs compatible with hackathon evaluation:
+
+```
+[START] task=easy_1 env=log-anomaly model=Qwen/Qwen3-4B
+[STEP] step=1 action=bash(grep ERROR log.txt) reward=0.00 done=false error=null
+[STEP] step=2 action=submit(error_spike,service_a) reward=0.75 done=true error=null
+[END] success=true steps=2 score=0.375 rewards=0.00,0.75
 ```
 
-### Option 2: Local LLM with Ollama
+### Using a Local Environment
 
 ```bash
-# Install and start Ollama
+# Start local server
+uvicorn server.app:app --host 0.0.0.0 --port 8000
+
+# Point inference to local server
+python inference.py --url http://localhost:8000 --difficulty easy
+```
+
+### Using Local LLMs (Ollama/vLLM)
+
+```bash
+# With Ollama
 ollama pull qwen2.5:7b
-
-# Set environment variables
 export API_BASE_URL="http://localhost:11434/v1"
 export MODEL_NAME="qwen2.5:7b"
-export BASE_URL="http://localhost:8000"
+python inference.py
 
-# Run baseline
-uv run python inference.py --mode batch --difficulty all --episodes 2
-```
-
-### Option 3: Local LLM with vLLM
-
-```bash
-# Start vLLM server
-python -m vllm.entrypoints.openai.api_server \
-  --model Qwen/Qwen2.5-7B-Instruct --port 8080
-
-# Set environment variables
+# With vLLM
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-7B-Instruct --port 8080
 export API_BASE_URL="http://localhost:8080/v1"
 export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
-export BASE_URL="http://localhost:8000"
-
-# Run baseline
-uv run python inference.py --mode batch --difficulty all --episodes 2
-```
-
-### Single-Task Execution (Evaluator-Compatible)
-
-```bash
-# One task, one episode
-uv run python inference.py --mode single --difficulty medium --url http://localhost:8000
-```
-
-### Optional Aggregate Summary
-
-```bash
-uv run python inference.py --mode batch --difficulty all --episodes 2 --summary-to-stderr
+python inference.py
 ```
 
 ## Optional: Training with TRL/GRPO
@@ -501,7 +519,7 @@ openenv push --repo-id your-username/log-anomaly-env
 
 ```bash
 # Build image
-docker build -t log-anomaly-env:latest -f server/Dockerfile .
+docker build -t log-anomaly-env:latest .
 
 # Run container
 docker run -p 8000:8000 log-anomaly-env:latest

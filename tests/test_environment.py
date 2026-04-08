@@ -3,6 +3,7 @@ Tests for Log Anomaly Investigation Environment.
 
 Run with: pytest tests/ -v
 """
+
 import pytest
 import os
 import tempfile
@@ -47,7 +48,7 @@ class TestLogParser:
     def test_parse_file(self):
         """Test parsing a complete log file."""
         parser = LogParser("generic")
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
             f.write("2024-01-15 INFO component_a Message 1\n")
             f.write("2024-01-15 WARN component_b Message 2\n")
             f.write("2024-01-15 ERROR component_a Message 3\n")
@@ -224,7 +225,7 @@ class TestLogAnomalyEnvironment:
     def test_reset_easy(self):
         """Test environment reset with easy difficulty."""
         obs = self.env.reset(difficulty="easy", seed=42)
-        assert obs.steps_remaining == 15
+        assert obs.steps_remaining == 20
         assert obs.task_difficulty == DifficultyLevel.EASY
         assert obs.answer_submitted is False
         assert self.env.state.episode_id is not None
@@ -232,41 +233,43 @@ class TestLogAnomalyEnvironment:
     def test_reset_medium(self):
         """Test environment reset with medium difficulty."""
         obs = self.env.reset(difficulty="medium", seed=123)
-        assert obs.steps_remaining == 15
+        assert obs.steps_remaining == 20
         assert obs.task_difficulty == DifficultyLevel.MEDIUM
 
     def test_reset_hard(self):
         """Test environment reset with hard difficulty."""
         obs = self.env.reset(difficulty="hard", seed=456)
-        assert obs.steps_remaining == 15
+        assert obs.steps_remaining == 20
         assert obs.task_difficulty == DifficultyLevel.HARD
 
     def test_step_bash_command(self):
         """Test executing a bash command."""
         self.env.reset(difficulty="easy", seed=42)
         action = InvestigationAction(
-            action_type="bash",
-            bash_command=BashCommand(command="cat log.txt | head -5")
+            action_type="bash", bash_command=BashCommand(command="cat log.txt | head -5")
         )
         obs = self.env.step(action)
-        assert obs.steps_remaining == 14
-        assert len(obs.command_history) == 1
-        assert obs.command_history[0]["command"] == "cat log.txt | head -5"
+        assert obs.steps_remaining == 19
+        # Command info is in metadata
+        assert "command" in obs.metadata
+        assert obs.metadata["command"] == "cat log.txt | head -5"
 
     def test_step_forbidden_command(self):
         """Test that forbidden commands are rejected."""
         self.env.reset(difficulty="easy", seed=42)
         action = InvestigationAction(
-            action_type="bash",
-            bash_command=BashCommand(command="rm -rf /")
+            action_type="bash", bash_command=BashCommand(command="rm -rf /")
         )
         obs = self.env.step(action)
-        assert "not allowed" in obs.command_output.lower() or "forbidden" in obs.command_output.lower()
+        assert (
+            "not allowed" in obs.command_output.lower() or "forbidden" in obs.command_output.lower()
+        )
 
     def test_submit_answer(self):
         """Test submitting an answer."""
         self.env.reset(difficulty="easy", seed=42)
-        gt = self.env.state.ground_truth
+        # Access ground truth via internal episode (for testing only)
+        gt = self.env.episode.ground_truth
 
         action = InvestigationAction(
             action_type="submit",
@@ -275,20 +278,19 @@ class TestLogAnomalyEnvironment:
                 component=gt["component"],
                 start_time=gt["start_time"],
                 end_time=gt["end_time"],
-            )
+            ),
         )
         obs = self.env.step(action)
         assert obs.answer_submitted is True
-        assert obs.steps_remaining == 0
-        assert obs.episode_reward > 0
+        assert obs.done is True
+        assert obs.reward is not None and obs.reward > 0
 
     def test_multiple_steps(self):
         """Test multiple sequential steps."""
         self.env.reset(difficulty="easy", seed=42)
         for _ in range(5):
             action = InvestigationAction(
-                action_type="bash",
-                bash_command=BashCommand(command="head -10 log.txt")
+                action_type="bash", bash_command=BashCommand(command="head -10 log.txt")
             )
             self.env.step(action)
         assert self.env.state.step_count == 5
@@ -313,6 +315,7 @@ class TestCalculateSummaryStats:
     def test_single_result(self):
         """Test summary with single result."""
         from models import EpisodeResult, DifficultyLevel
+
         result = EpisodeResult(
             episode_id="test",
             task_id="test",
@@ -341,7 +344,7 @@ class TestIntegration:
         # Reset
         obs = env.reset(difficulty="easy", seed=999)
         episode_id = env.state.episode_id
-        gt = env.state.ground_truth
+        gt = env.episode.ground_truth  # Access via episode object
 
         # Execute some commands
         commands = [
@@ -350,10 +353,7 @@ class TestIntegration:
             "awk '{print $3}' log.txt | sort | uniq -c | sort -rn",
         ]
         for cmd in commands:
-            action = InvestigationAction(
-                action_type="bash",
-                bash_command=BashCommand(command=cmd)
-            )
+            action = InvestigationAction(action_type="bash", bash_command=BashCommand(command=cmd))
             env.step(action)
 
         # Submit answer
@@ -364,7 +364,7 @@ class TestIntegration:
                 component=gt["component"],
                 start_time=gt["start_time"],
                 end_time=gt["end_time"],
-            )
+            ),
         )
         env.step(action)
 

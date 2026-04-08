@@ -19,7 +19,8 @@ Example:
     ...     result = env.step(action)
     ...     print(result['observation']['command_output'][:200])
 """
-from .models import (
+
+from models import (
     InvestigationAction,
     InvestigationObservation,
     InvestigationState,
@@ -30,7 +31,7 @@ from .models import (
     BashCommand,
     LogLine,
 )
-from .client import LogAnomalyEnv
+from client import LogAnomalyEnv
 
 __all__ = [
     "LogAnomalyEnv",
